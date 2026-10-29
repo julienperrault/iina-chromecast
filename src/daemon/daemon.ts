@@ -13,9 +13,14 @@ const CONTROL_PORT = 45890;
 
 // If invoked with `--spawn-daemon`, spawn a detached background process and exit immediately (0)
 if (process.argv.includes("--spawn-daemon")) {
+  let stdioConfig: any = "ignore";
+  try {
+    const logFd = fs.openSync("/tmp/iina-chromecast-daemon.log", "a");
+    stdioConfig = ["ignore", logFd, logFd];
+  } catch {}
   const child = spawn(process.execPath, [__filename, "--run-server"], {
     detached: true,
-    stdio: "ignore",
+    stdio: stdioConfig,
   });
   child.unref();
   process.exit(0);
@@ -66,6 +71,7 @@ function buildFullStateSnapshot(): DaemonSnapshot {
 }
 
 async function handleAction(action: string, payload: any = {}): Promise<any> {
+  console.log(`[daemon] RPC action: "${action}" payload:`, JSON.stringify(payload));
   if (payload.language) {
     config.language = payload.language;
   }
@@ -119,6 +125,11 @@ async function handleAction(action: string, payload: any = {}): Promise<any> {
     case "stop":
       await castPlayer.stopCasting();
       return buildFullStateSnapshot();
+
+    case "shutdown":
+      await castPlayer.stopCasting();
+      setTimeout(() => process.exit(0), 100);
+      return { ok: true, state: buildFullStateSnapshot() };
 
     case "probe":
       if (payload.filePath && fs.existsSync(payload.filePath)) {

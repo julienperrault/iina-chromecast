@@ -43,6 +43,9 @@ registerClientHooks({
   notifySidebarFeedback,
 });
 
+// Initialize plugin UI, menus, and daemon immediately upon entry
+initPluginUI();
+
 event.on("iina.window-loaded", () => {
   initPluginUI();
 });

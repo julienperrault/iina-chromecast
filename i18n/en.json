@@ -47,6 +47,7 @@
   "error.device_not_found": "Chromecast device not found ({id})",
   "error.no_valid_video": "No valid video file is open in IINA.",
   "error.connect_failed": "Unable to connect to {name}: {err}",
+  "error.local_network_eperm": "Local Network access denied by macOS. Please authorize IINA in System Settings > Privacy & Security > Local Network.",
   "error.launch_failed": "Unable to launch media receiver: {err}",
   "error.load_failed": "Media load failed: {err}",
 

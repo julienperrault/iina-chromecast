@@ -5,6 +5,7 @@ import {
   tr,
   isFileTransitioning,
 } from "./state.js";
+import { resolveNodeBinary, resolveDaemonScript } from "../shared/dependencies.js";
 import type { RpcAction, RpcRequestPayload, DaemonSnapshot } from "../types/rpc.js";
 
 const { core, utils, preferences, http, console } = iina;
@@ -26,83 +27,6 @@ export function getPreferencesSignature(): string {
     res: preferences.get("max_resolution") || "1080",
     ff: preferences.get("ffmpeg_path") || "",
   });
-}
-
-export function findNodeBinary(): string {
-  const customNode = preferences.get("node_path");
-  if (runtime.cachedNodeBinary && !customNode) {
-    return runtime.cachedNodeBinary;
-  }
-
-  const userCandidates: string[] = [];
-  try {
-    const nvmBase = utils.resolvePath("~/.nvm/versions/node");
-    if (iina.file.exists(nvmBase)) {
-      const versions = iina.file.list(nvmBase, { includeSubDir: false }) || [];
-      const sorted = versions
-        .filter((v: any) => v.isDir)
-        .map((v: any) => v.filename)
-        .sort()
-        .reverse();
-      if (sorted.length > 0) {
-        userCandidates.push(`${nvmBase}/${sorted[0]}/bin/node`);
-      }
-    }
-  } catch (e) {}
-
-  const candidates = [
-    customNode,
-    ...userCandidates,
-    utils.resolvePath("~/.local/share/fnm/current/bin/node"),
-    utils.resolvePath("~/.volta/bin/node"),
-    utils.resolvePath("~/.asdf/shims/node"),
-    utils.resolvePath("~/.local/bin/node"),
-    "/opt/homebrew/bin/node", // Apple Silicon Homebrew
-    "/usr/local/bin/node", // Intel Mac Homebrew
-    "/opt/local/bin/node", // MacPorts
-    "/run/current-system/sw/bin/node", // Nix
-    "/usr/bin/node",
-    "/bin/node",
-    "node",
-  ].filter(Boolean) as string[];
-
-  for (const bin of candidates) {
-    if (utils.fileInPath(bin)) {
-      runtime.cachedNodeBinary = bin;
-      return bin;
-    }
-  }
-  runtime.cachedNodeBinary = "/opt/homebrew/bin/node";
-  return runtime.cachedNodeBinary;
-}
-
-export function getDaemonScriptPath(): string {
-  if (runtime.cachedDaemonPath) return runtime.cachedDaemonPath;
-
-  const dataDir = (utils.resolvePath("@data") || "").replace(/\/+$/, "");
-  const pluginsDir = dataDir ? dataDir.replace(/\/\.data(\/.*)?$/, "") : "";
-  const pluginDirFromData = dataDir.replace(/\/\.data\/([^/]+)$/, "/$1");
-
-  const candidates = [
-    pluginDirFromData ? `${pluginDirFromData}/dist/daemon.js` : "",
-    pluginsDir
-      ? `${pluginsDir}/io.iina.chromecast.iinaplugin-dev/dist/daemon.js`
-      : "",
-    pluginsDir
-      ? `${pluginsDir}/io.iina.chromecast.iinaplugin/dist/daemon.js`
-      : "",
-    utils.resolvePath("dist/daemon.js"),
-  ].filter(Boolean) as string[];
-
-  for (const candidate of candidates) {
-    if (candidate.startsWith("/") && utils.fileInPath(candidate)) {
-      runtime.cachedDaemonPath = candidate;
-      return runtime.cachedDaemonPath;
-    }
-  }
-
-  runtime.cachedDaemonPath = candidates[0] || utils.resolvePath("dist/daemon.js");
-  return runtime.cachedDaemonPath;
 }
 
 // Callbacks to be registered by other modules
@@ -167,8 +91,10 @@ export async function ensureDaemonStarted(): Promise<void> {
     // Daemon not running yet, spawn it in detached mode
   }
 
-  const nodeBin = findNodeBinary();
-  const daemonPath = getDaemonScriptPath();
+  const nodeBin =
+    resolveNodeBinary(preferences.get("node_path")) || "/opt/homebrew/bin/node";
+  const daemonPath =
+    resolveDaemonScript() || utils.resolvePath("dist/daemon.js");
   console.log(
     `Spawning detached Chromecast daemon: ${nodeBin} ${daemonPath} --spawn-daemon`
   );
@@ -290,6 +216,15 @@ export function applyDaemonSnapshot(snap: DaemonSnapshot): void {
     state.muted = snap.muted;
   }
   state.error = snap.error || null;
+  if (snap.error && snap.error !== runtime.lastReportedError) {
+    runtime.lastReportedError = snap.error;
+    core.osd(snap.error);
+    if (onSidebarFeedback) {
+      onSidebarFeedback("error", snap.error);
+    }
+  } else if (!snap.error) {
+    runtime.lastReportedError = null;
+  }
 
   // Transition into PLAYING
   if (state.castState === "PLAYING" && runtime.previousCastState !== "PLAYING") {

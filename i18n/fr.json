@@ -47,6 +47,7 @@
   "error.device_not_found": "Appareil Chromecast introuvable ({id})",
   "error.no_valid_video": "Aucun fichier vidéo valide n'est ouvert dans IINA.",
   "error.connect_failed": "Impossible de se connecter à {name} : {err}",
+  "error.local_network_eperm": "Accès au réseau local refusé par macOS. Veuillez autoriser IINA dans Réglages Système > Confidentialité et sécurité > Réseau local.",
   "error.launch_failed": "Impossible de lancer le récepteur média : {err}",
   "error.load_failed": "Échec du chargement média : {err}",
 

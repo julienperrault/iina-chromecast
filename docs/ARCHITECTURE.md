@@ -11,12 +11,13 @@ Because IINA's JavaScript plugin environment runs inside **JavaScriptCore (`JSC`
 1. **IINA Plugin Sandbox ([`src/index/`](../src/index/index.ts))**:
    - Runs inside IINA's JavaScriptCore context.
    - Listens to `mpv` and `iina` lifecycle events (`iina.file-loaded`, `mpv.pause.changed`, `mpv.playback-restart`, `mpv.aid.changed`, `mpv.sid.changed`, `mpv.volume.changed`).
+   - Resolves binaries and scripts portably via [`src/shared/dependencies.ts`](../src/shared/dependencies.ts).
    - Spawns the companion Node.js daemon in detached mode (`--spawn-daemon`) and communicates with it via local HTTP RPC (`http://127.0.0.1:45890`).
 2. **Sidebar & Preferences WebViews ([`ui/sidebar.html`](../ui/sidebar.html), [`ui/preferences.html`](../ui/preferences.html))**:
    - Render reactive UI controls with DOM signature diffing, animated scan feedback, toast notifications, and instant multi-language switching (`en`, `fr`, `es`).
 3. **Detached Companion Daemon ([`src/daemon/`](../src/daemon/daemon.ts))**:
-   - Persistent Node.js process listening on `127.0.0.1:45890` (Control RPC) and a dynamic LAN port (Media & WebVTT HTTP server).
-   - Performs mDNS discovery (`_googlecast._tcp.local`), `ffprobe` analysis, `FFmpeg` remuxing / hardware GPU transcoding (`h264_videotoolbox`), WebVTT subtitle extraction, and `CASTV2` TLS socket communication with Chromecast devices.
+   - Persistent Node.js process listening on `127.0.0.1:45890` (Control RPC) and port `45891` (Media & WebVTT HTTP server).
+   - Performs mDNS discovery (`_googlecast._tcp.local`) with DNS A-record fallback resolution, `ffprobe` analysis, `FFmpeg` remuxing / hardware GPU transcoding (`h264_videotoolbox`), WebVTT subtitle extraction, and `CASTV2` TLS socket communication with Chromecast devices.
 
 ```mermaid
 flowchart TB

@@ -14,8 +14,8 @@ export interface RangeResult {
 
 /**
  * Parses an HTTP Range header according to RFC 7233.
- * Returns null if the header is missing, or { start, end, chunkSize },
- * or throws/returns false if the range is invalid (416).
+ * Returns null if the header is missing, { start, end, chunkSize } on success,
+ * or false if the range is invalid / unsatisfiable (416).
  */
 export function parseRange(
   rangeHeader: string | undefined,
@@ -36,7 +36,6 @@ export function parseRange(
   let end: number;
 
   if (rawStart === "") {
-    // Suffix range: bytes=-500
     const suffix = parseInt(rawEnd, 10);
     if (isNaN(suffix) || suffix <= 0) return false;
     start = Math.max(0, totalSize - suffix);
@@ -53,11 +52,7 @@ export function parseRange(
     }
   }
 
-  return {
-    start,
-    end,
-    chunkSize: end - start + 1,
-  };
+  return { start, end, chunkSize: end - start + 1 };
 }
 
 export interface FfmpegStreamOptions {
@@ -68,6 +63,9 @@ export interface FfmpegStreamOptions {
   audioStreamIndex: number | null;
 }
 
+/**
+ * Builds the command line argument list for FFmpeg streaming.
+ */
 export function buildFfmpegStreamArgs({
   filePath,
   startSec,
@@ -75,80 +73,63 @@ export function buildFfmpegStreamArgs({
   config,
   audioStreamIndex,
 }: FfmpegStreamOptions): string[] {
-  const isVideoCopy = Boolean(compat && compat.videoCopy);
+  const isVideoCopy = Boolean(compat?.videoCopy);
   const args = ["-hide_banner", "-loglevel", "warning"];
 
   if (!isVideoCopy) {
     args.push("-hwaccel", "videotoolbox");
   }
   if (startSec > 0) {
-    if (isVideoCopy) {
-      args.push("-noaccurate_seek");
-    }
+    if (isVideoCopy) args.push("-noaccurate_seek");
     args.push("-ss", String(startSec));
   }
-  args.push("-i", filePath, "-map", "0:v:0");
-
-  if (audioStreamIndex !== null && audioStreamIndex !== undefined) {
-    args.push("-map", `0:${audioStreamIndex}?`);
-  } else {
-    args.push("-map", "0:a:0?");
-  }
+  args.push(
+    "-i", filePath,
+    "-map", "0:v:0",
+    "-map", audioStreamIndex !== null && audioStreamIndex !== undefined ? `0:${audioStreamIndex}?` : "0:a:0?"
+  );
 
   if (isVideoCopy) {
     args.push("-c:v", "copy");
-    if (compat && compat.isHevcStream) {
-      args.push("-tag:v", "hvc1");
-    }
+    if (compat?.isHevcStream) args.push("-tag:v", "hvc1");
   } else {
-    const maxW =
-      Number(config.maxResolution) === 720
-        ? 1280
-        : Number(config.maxResolution) === 2160
-        ? 3840
-        : 1920;
+    const res = Number(config.maxResolution);
+    const maxW = res === 720 ? 1280 : res === 2160 ? 3840 : 1920;
     args.push(
-      "-c:v",
-      "h264_videotoolbox",
-      "-b:v",
-      config.videoBitrate || "8M",
-      "-allow_sw",
-      "1",
-      "-pix_fmt",
-      "yuv420p",
-      "-vf",
-      `scale='min(${maxW},iw)':-2`
+      "-c:v", "h264_videotoolbox",
+      "-b:v", config.videoBitrate || "8M",
+      "-allow_sw", "1",
+      "-pix_fmt", "yuv420p",
+      "-vf", `scale='min(${maxW},iw)':-2`
     );
   }
 
-  if (compat && compat.audioCopy) {
+  if (compat?.audioCopy) {
     args.push("-c:a", "copy");
   } else {
-    args.push(
-      "-c:a",
-      "aac",
-      "-ac",
-      "2",
-      "-b:a",
-      "192k",
-      "-af",
-      "aresample=async=1"
-    );
+    args.push("-c:a", "aac", "-ac", "2", "-b:a", "192k", "-af", "aresample=async=1");
   }
 
   args.push(
-    "-avoid_negative_ts",
-    "make_zero",
-    "-movflags",
-    "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
-    "-f",
-    "mp4",
+    "-avoid_negative_ts", "make_zero",
+    "-movflags", "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
+    "-f", "mp4",
     "pipe:1"
   );
 
   return args;
 }
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+  "Access-Control-Allow-Headers": "Range, Content-Type, Origin, Accept",
+  "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
+};
+
+/**
+ * HTTP Stream Server serving media files and on-the-fly FFmpeg transcode streams.
+ */
 export class StreamServer {
   private server: http.Server | null = null;
   private port = 0;
@@ -162,15 +143,16 @@ export class StreamServer {
     for (const proc of this.activeFfmpegProcesses) {
       try {
         proc.kill("SIGKILL");
-      } catch (e) {}
+      } catch {}
     }
     this.activeFfmpegProcesses.clear();
   }
 
   public getStreamContentType(activeCast: any): string {
     if (activeCast.mode === "direct" && activeCast.filePath) {
-      const ext = path.extname(activeCast.filePath).toLowerCase();
-      if (ext === ".webm") return "video/webm";
+      if (path.extname(activeCast.filePath).toLowerCase() === ".webm") {
+        return "video/webm";
+      }
     }
     return "video/mp4";
   }
@@ -184,16 +166,9 @@ export class StreamServer {
 
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-        res.setHeader(
-          "Access-Control-Allow-Headers",
-          "Range, Content-Type, Origin, Accept"
-        );
-        res.setHeader(
-          "Access-Control-Expose-Headers",
-          "Content-Range, Content-Length, Accept-Ranges"
-        );
+        for (const [k, v] of Object.entries(CORS_HEADERS)) {
+          res.setHeader(k, v);
+        }
 
         if (req.method === "OPTIONS") {
           res.writeHead(204);
@@ -205,9 +180,10 @@ export class StreamServer {
           req.url || "/",
           `http://${req.headers.host || "localhost"}`
         );
-        const pathname = parsedUrl.pathname;
 
-        if (pathname === "/subtitles.vtt") {
+        console.log(`[streamer] HTTP ${req.method} ${parsedUrl.pathname} (range: ${req.headers.range || "none"})`);
+
+        if (parsedUrl.pathname === "/subtitles.vtt") {
           subtitles.handleSubtitleRequest({
             req,
             res,
@@ -218,7 +194,7 @@ export class StreamServer {
           return;
         }
 
-        if (pathname === "/video") {
+        if (parsedUrl.pathname === "/video") {
           this.handleVideoRequest(req, res, parsedUrl, config, activeCast);
           return;
         }
@@ -227,19 +203,30 @@ export class StreamServer {
         res.end("Not found");
       });
 
-      this.server.listen(0, "0.0.0.0", () => {
-        const addr = this.server?.address();
-        if (addr && typeof addr === "object") {
-          this.port = addr.port;
-          resolve(this.port);
+      const STREAM_PORT = 45891;
+      const startListen = (portToTry: number) => {
+        this.server!.listen(portToTry, "0.0.0.0", () => {
+          const addr = this.server?.address();
+          if (addr && typeof addr === "object") {
+            this.port = addr.port;
+            console.log(`[streamer] HTTP stream server listening on 0.0.0.0:${this.port}`);
+            resolve(this.port);
+          } else {
+            reject(new Error("Unable to obtain stream server port"));
+          }
+        });
+      };
+
+      this.server.once("error", (err: any) => {
+        if (err.code === "EADDRINUSE") {
+          console.log(`[streamer] Port ${STREAM_PORT} busy, falling back to random port...`);
+          startListen(0);
         } else {
-          reject(new Error("Unable to obtain stream server port"));
+          reject(err);
         }
       });
 
-      this.server.on("error", (err) => {
-        reject(err);
-      });
+      startListen(STREAM_PORT);
     });
   }
 
@@ -254,18 +241,20 @@ export class StreamServer {
     let stat: fs.Stats | null = null;
     try {
       stat = filePath ? fs.statSync(filePath) : null;
-    } catch (e) {
+    } catch {
       stat = null;
     }
-    if (!stat) {
+    if (!stat || !filePath) {
+      console.error(`[streamer] File not found: ${filePath}`);
       res.writeHead(404);
       res.end("File not found");
       return;
     }
 
+    console.log(`[streamer] Serving video: mode=${activeCast.mode}, file=${filePath}, size=${stat.size}, range=${req.headers.range}`);
+
     if (activeCast.mode === "direct") {
       const total = stat.size;
-      const contentType = this.getStreamContentType(activeCast);
       const parsedRange = parseRange(req.headers.range, total);
 
       if (parsedRange === false) {
@@ -277,31 +266,27 @@ export class StreamServer {
       const isPartial = parsedRange !== null;
       const headers: Record<string, string | number> = {
         "Accept-Ranges": "bytes",
-        "Content-Type": contentType,
+        "Content-Type": this.getStreamContentType(activeCast),
+        "Content-Length": isPartial ? parsedRange.chunkSize : total,
       };
 
-      let streamOptions: { start?: number; end?: number } = {};
       if (isPartial) {
         headers["Content-Range"] = `bytes ${parsedRange.start}-${parsedRange.end}/${total}`;
-        headers["Content-Length"] = parsedRange.chunkSize;
-        streamOptions = { start: parsedRange.start, end: parsedRange.end };
-      } else {
-        headers["Content-Length"] = total;
       }
 
       res.writeHead(isPartial ? 206 : 200, headers);
-
       if (req.method === "HEAD") {
         res.end();
         return;
       }
 
+      const streamOptions = isPartial
+        ? { start: parsedRange.start, end: parsedRange.end }
+        : {};
       const fileStream = fs.createReadStream(filePath, streamOptions);
       req.on("close", () => fileStream.destroy());
       fileStream.on("error", () => {
-        try {
-          res.end();
-        } catch (e) {}
+        try { res.end(); } catch {}
       });
       fileStream.pipe(res);
       return;
@@ -318,9 +303,7 @@ export class StreamServer {
       return;
     }
 
-    if (req.socket) {
-      req.socket.setNoDelay(true);
-    }
+    if (req.socket) req.socket.setNoDelay(true);
 
     const startSec = Number(
       parsedUrl.searchParams.get("start") || activeCast.seekOffset || 0
@@ -345,9 +328,7 @@ export class StreamServer {
     const cleanup = () => {
       if (this.activeFfmpegProcesses.has(ffmpegProc)) {
         this.activeFfmpegProcesses.delete(ffmpegProc);
-        try {
-          ffmpegProc.kill("SIGKILL");
-        } catch (e) {}
+        try { ffmpegProc.kill("SIGKILL"); } catch {}
       }
     };
 

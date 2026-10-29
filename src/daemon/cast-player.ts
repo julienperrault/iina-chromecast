@@ -9,10 +9,12 @@ import type { StreamServer } from "./streamer.js";
 import type { SubtitleManager } from "./subtitles.js";
 import { probeMedia, analyzeCompatibility } from "./compatibility.js";
 
+/**
+ * Determines the best local IPv4 address reachable by the target Chromecast host.
+ */
 export function getLocalIpAddress(targetHost: string): string {
   const interfaces = os.networkInterfaces();
   let fallbackIp = "127.0.0.1";
-
   const targetPrefix = targetHost
     ? targetHost.split(".").slice(0, 3).join(".") + "."
     : null;
@@ -96,6 +98,31 @@ export function createInitialCastState(): ActiveCastState {
   };
 }
 
+export interface CastOptions {
+  deviceId: string;
+  filePath?: string;
+  url?: string;
+  title?: string;
+  startTime?: number;
+  currentTime?: number;
+  subtitlePath?: string | null;
+  audioStreamIndex?: number | null;
+  subtitleStreamIndex?: number | string | null;
+  transcodeMode?: "auto" | "remux" | "transcode" | "direct";
+}
+
+interface LoadParams {
+  streamUrl: string;
+  contentType: string;
+  streamType: "BUFFERED";
+  title: string;
+  duration: number;
+  autoplay: boolean;
+  initialCurrentTime: number;
+  localIp: string;
+  httpPort: number;
+}
+
 export class CastPlayerManager {
   public activeCast: ActiveCastState = createInitialCastState();
   private currentCastSessionId = 0;
@@ -137,18 +164,7 @@ export class CastPlayerManager {
     audioStreamIndex = null,
     subtitleStreamIndex = null,
     transcodeMode = "auto",
-  }: {
-    deviceId: string;
-    filePath?: string;
-    url?: string;
-    title?: string;
-    startTime?: number;
-    currentTime?: number;
-    subtitlePath?: string | null;
-    audioStreamIndex?: number | null;
-    subtitleStreamIndex?: number | string | null;
-    transcodeMode?: "auto" | "remux" | "transcode" | "direct";
-  }): Promise<void> {
+  }: CastOptions): Promise<void> {
     const effectiveStartTime = startTime ?? currentTime ?? 0;
     const device = this.devices.get(deviceId);
     if (!device) {
@@ -161,8 +177,7 @@ export class CastPlayerManager {
     const canReusePlayer = Boolean(
       this.activeCast.client &&
         this.activeCast.player &&
-        this.activeCast.device &&
-        this.activeCast.device.id === device.id
+        this.activeCast.device?.id === device.id
     );
 
     this.activeCast.isLoadingMedia = true;
@@ -190,11 +205,10 @@ export class CastPlayerManager {
     const localIp = getLocalIpAddress(device.host);
     let streamUrl = "";
     let contentType = "video/mp4";
-    const streamType = "BUFFERED";
     let duration = 0;
 
     let actualFilePath = filePath;
-    if (!actualFilePath && url && url.startsWith("file://")) {
+    if (!actualFilePath && url?.startsWith("file://")) {
       actualFilePath = decodeURIComponent(url.replace(/^file:\/\//, ""));
     }
 
@@ -226,14 +240,13 @@ export class CastPlayerManager {
       this.activeCast.duration = compat.summary.duration || 0;
       this.activeCast.audioStreamIndex = compat.summary.selectedAudioStreamIndex ?? null;
 
-      const chosenSubIndex =
+      this.activeCast.subtitleStreamIndex =
         subtitleStreamIndex !== null && subtitleStreamIndex !== undefined
           ? subtitleStreamIndex
           : subtitlePath
           ? "external"
-          : compat.summary.embeddedSubIndex;
+          : compat.summary.embeddedSubIndex ?? null;
 
-      this.activeCast.subtitleStreamIndex = chosenSubIndex ?? null;
       this.activeCast.seekOffset =
         compat.mode === "direct" ? 0 : Math.floor(effectiveStartTime);
       this.activeCast.currentTime = Math.floor(effectiveStartTime);
@@ -251,7 +264,6 @@ export class CastPlayerManager {
       this.activeCast.modeReason = t(this.config.language, "compat.remote");
       this.activeCast.seekOffset = 0;
       streamUrl = url;
-      contentType = "video/mp4";
     } else {
       this.activeCast.isLoadingMedia = false;
       this.activeCast.playerState = "IDLE";
@@ -262,10 +274,14 @@ export class CastPlayerManager {
     this.activeCast.title =
       title || (actualFilePath ? path.basename(actualFilePath) : "IINA Stream");
 
-    const loadParams = {
+    console.log(
+      `[cast-player] startCasting on "${device.name}" (${device.host}:${device.port}) mode=${this.activeCast.mode} streamUrl=${streamUrl}`
+    );
+
+    const loadParams: LoadParams = {
       streamUrl,
       contentType,
-      streamType: streamType as "BUFFERED",
+      streamType: "BUFFERED",
       title: this.activeCast.title,
       duration,
       autoplay: true,
@@ -282,69 +298,55 @@ export class CastPlayerManager {
           ...loadParams,
         });
         return;
-      } catch (reuseErr) {
+      } catch {
         if (sessionId !== this.currentCastSessionId) return;
         await this.stopCasting(false, true);
         if (sessionId !== this.currentCastSessionId) return;
       }
     }
 
-    await this.connectAndLoadMedia({
-      device,
-      ...loadParams,
-    });
+    await this.connectAndLoadMedia(device, loadParams);
   }
 
-  private connectAndLoadMedia({
-    device,
-    streamUrl,
-    contentType,
-    streamType,
-    title,
-    duration,
-    autoplay,
-    initialCurrentTime,
-    localIp,
-    httpPort,
-  }: {
-    device: DiscoveredDevice;
-    streamUrl: string;
-    contentType: string;
-    streamType: "BUFFERED";
-    title: string;
-    duration: number;
-    autoplay: boolean;
-    initialCurrentTime: number;
-    localIp: string;
-    httpPort: number;
-  }): Promise<any> {
+  private connectAndLoadMedia(
+    device: DiscoveredDevice,
+    params: LoadParams
+  ): Promise<any> {
     return new Promise((resolve, reject) => {
       const client = new Client();
       this.activeCast.client = client;
 
       client.on("error", (err: Error) => {
+        console.error(`[cast-player] Client error: ${err.message}`);
         this.logError(`Chromecast error: ${err.message}`);
       });
 
+      console.log(`[cast-player] Connecting to ${device.host}:${device.port}...`);
       client.connect({ host: device.host, port: device.port }, (err?: any) => {
         if (err) {
+          console.error(`[cast-player] Connect failed:`, err);
           this.activeCast.isLoadingMedia = false;
           this.activeCast.playerState = "IDLE";
           this.activeCast.device = null;
-          return reject(
-            new Error(
-              t(this.config.language, "error.connect_failed", {
+          const isEperm =
+            err.code === "EPERM" || String(err.message).includes("EPERM");
+          const errorMsg = isEperm
+            ? t(this.config.language, "error.local_network_eperm")
+            : t(this.config.language, "error.connect_failed", {
                 name: device.name,
                 err: err.message,
-              })
-            )
-          );
+              });
+          const wrappedErr: any = new Error(errorMsg);
+          if (isEperm) wrappedErr.code = "LOCAL_NETWORK_EPERM";
+          return reject(wrappedErr);
         }
 
+        console.log(`[cast-player] Connected. Launching DefaultMediaReceiver...`);
         client.launch(
           DefaultMediaReceiver,
           (launchErr: Error | null, player: any) => {
             if (launchErr) {
+              console.error(`[cast-player] Launch failed:`, launchErr);
               this.activeCast.isLoadingMedia = false;
               this.activeCast.playerState = "IDLE";
               this.activeCast.device = null;
@@ -357,23 +359,15 @@ export class CastPlayerManager {
               );
             }
 
+            console.log(`[cast-player] DefaultMediaReceiver launched successfully`);
             this.activeCast.player = player;
-
             player.on("status", (status: any) => {
               this.handlePlayerStatus(status);
             });
 
             this.loadCurrentStreamOnPlayer({
               player,
-              streamUrl,
-              contentType,
-              streamType,
-              title,
-              duration,
-              autoplay,
-              initialCurrentTime,
-              localIp,
-              httpPort,
+              ...params,
             })
               .then(resolve)
               .catch(reject);
@@ -394,18 +388,7 @@ export class CastPlayerManager {
     initialCurrentTime,
     localIp,
     httpPort,
-  }: {
-    player: any;
-    streamUrl: string;
-    contentType: string;
-    streamType: "BUFFERED";
-    title: string;
-    duration: number;
-    autoplay: boolean;
-    initialCurrentTime: number;
-    localIp: string;
-    httpPort: number;
-  }): Promise<any> {
+  }: LoadParams & { player: any }): Promise<any> {
     return new Promise((resolve, reject) => {
       this.activeCast.isLoadingMedia = true;
       const media: any = {
@@ -455,9 +438,11 @@ export class CastPlayerManager {
         loadOptions.activeTrackIds = [1];
       }
 
+      console.log(`[cast-player] Sending LOAD to player. Media:`, JSON.stringify(media));
       player.load(media, loadOptions, (loadErr: Error | null, status: any) => {
         this.activeCast.isLoadingMedia = false;
         if (loadErr) {
+          console.error(`[cast-player] player.load error:`, loadErr);
           this.activeCast.playerState = "IDLE";
           return reject(
             new Error(
@@ -468,11 +453,11 @@ export class CastPlayerManager {
           );
         }
 
-        if (status && status.playerState && status.playerState !== "IDLE") {
-          this.activeCast.playerState = status.playerState;
-        } else {
-          this.activeCast.playerState = "BUFFERING";
-        }
+        console.log(`[cast-player] player.load success status:`, JSON.stringify(status));
+        this.activeCast.playerState =
+          status?.playerState && status.playerState !== "IDLE"
+            ? status.playerState
+            : "BUFFERING";
         this.handlePlayerStatus(status);
         this.startStatusPolling();
         resolve(status);
@@ -482,16 +467,15 @@ export class CastPlayerManager {
 
   public handlePlayerStatus(status: any): void {
     if (!status) return;
-    if (this.activeCast.isLoadingMedia) {
-      return;
-    }
+    console.log(`[cast-player] handlePlayerStatus: state=${status.playerState}, idleReason=${status.idleReason}, currentTime=${status.currentTime}`);
+    if (this.activeCast.isLoadingMedia) return;
 
     if (
       status.playerState === "IDLE" &&
       !status.idleReason &&
-      (this.activeCast.playerState === "BUFFERING" ||
-        this.activeCast.playerState === "CONNECTING" ||
-        this.activeCast.playerState === "PLAYING")
+      ["BUFFERING", "CONNECTING", "PLAYING"].includes(
+        this.activeCast.playerState
+      )
     ) {
       return;
     }
@@ -507,8 +491,7 @@ export class CastPlayerManager {
     }
     if (
       !this.activeCast.duration &&
-      status.media &&
-      typeof status.media.duration === "number" &&
+      typeof status.media?.duration === "number" &&
       status.media.duration > 0
     ) {
       this.activeCast.duration = status.media.duration;
@@ -542,20 +525,14 @@ export class CastPlayerManager {
         this.activeCast.isLoadingMedia
       )
         return;
-      if (
-        this.activeCast.playerState !== "PLAYING" &&
-        this.activeCast.playerState !== "BUFFERING" &&
-        this.activeCast.playerState !== "CONNECTING"
-      ) {
+      if (!["PLAYING", "BUFFERING", "CONNECTING"].includes(this.activeCast.playerState)) {
         return;
       }
       try {
         this.activeCast.player.getStatus((err: any, status: any) => {
-          if (!err && status) {
-            this.handlePlayerStatus(status);
-          }
+          if (!err && status) this.handlePlayerStatus(status);
         });
-      } catch (e) {}
+      } catch {}
     }, 1000);
   }
 
@@ -565,7 +542,6 @@ export class CastPlayerManager {
     this.activeCast.seekOffset =
       this.activeCast.mode === "direct" ? 0 : resumePosition;
     this.activeCast.currentTime = resumePosition;
-
     this.activeCast.vttContent = null;
     this.activeCast.vttContentOffset = null;
 
@@ -640,15 +616,13 @@ export class CastPlayerManager {
   }
 
   public play(): void {
-    if (!this.activeCast.player) return;
-    this.activeCast.player.play((err: any, status: any) => {
+    this.activeCast.player?.play((err: any, status: any) => {
       if (!err) this.handlePlayerStatus(status);
     });
   }
 
   public pause(): void {
-    if (!this.activeCast.player) return;
-    this.activeCast.player.pause((err: any, status: any) => {
+    this.activeCast.player?.pause((err: any, status: any) => {
       if (!err) this.handlePlayerStatus(status);
     });
   }
@@ -673,18 +647,13 @@ export class CastPlayerManager {
   public setVolume(level?: number, muted?: boolean): void {
     if (!this.activeCast.client) return;
     const volObj: any = {};
-    if (typeof level === "number") {
-      volObj.level = Math.max(0, Math.min(1, level));
-    }
-    if (typeof muted === "boolean") {
-      volObj.muted = muted;
-    }
+    if (typeof level === "number") volObj.level = Math.max(0, Math.min(1, level));
+    if (typeof muted === "boolean") volObj.muted = muted;
+
     this.activeCast.client.setVolume(volObj, (err: any, vol: any) => {
       if (!err && vol) {
-        this.activeCast.volume =
-          typeof vol.level === "number" ? vol.level : this.activeCast.volume;
-        this.activeCast.muted =
-          typeof vol.muted === "boolean" ? vol.muted : this.activeCast.muted;
+        if (typeof vol.level === "number") this.activeCast.volume = vol.level;
+        if (typeof vol.muted === "boolean") this.activeCast.muted = vol.muted;
       }
     });
   }
@@ -701,11 +670,10 @@ export class CastPlayerManager {
       this.activeCast.statusTimer = null;
     }
 
-    const player = this.activeCast.player;
-    const client = this.activeCast.client;
-
+    const { player, client } = this.activeCast;
     this.activeCast.client = null;
     this.activeCast.player = null;
+
     if (!preserveConnectingState) {
       this.activeCast.isLoadingMedia = false;
       this.activeCast.device = null;
@@ -723,14 +691,14 @@ export class CastPlayerManager {
       };
       if (closeApp && client && player) {
         try {
-          client.stop(player, () => done());
-        } catch (e) {
+          client.stop(player, done);
+        } catch {
           done();
         }
       } else if (player) {
         try {
-          player.stop(() => done());
-        } catch (e) {
+          player.stop(done);
+        } catch {
           done();
         }
       } else {
@@ -744,7 +712,7 @@ export class CastPlayerManager {
     if (client) {
       try {
         client.close();
-      } catch (e) {}
+      } catch {}
     }
   }
 }

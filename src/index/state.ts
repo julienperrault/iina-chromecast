@@ -39,6 +39,7 @@ export const runtime = {
   cachedDaemonPath: null as string | null,
   lastSidebarPayloadJson: "",
   lastSyncedPrefsSig: "",
+  lastReportedError: null as string | null,
 };
 
 export function getActiveLang(): string {
