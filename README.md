@@ -81,7 +81,13 @@ The project includes a dedicated static analyzer & i18n linter ([`lint.js`](lint
 # Show all available Make targets
 make help
 
-# Run the linter (JS syntax, IINA 1.5 anti-deadlock checks, HTML inline scripts, en/fr/es i18n parity)
+# Run the strict TypeScript typecheck
+make typecheck
+
+# Run the native unit test suite (node:test)
+make test
+
+# Run the linter (TypeScript, JS syntax, IINA 1.5 anti-deadlock checks, HTML inline scripts, en/fr/es i18n parity)
 make lint
 
 # Audit codebase for unused translation keys & dead code
@@ -120,9 +126,11 @@ iina-chromecast/
 │   ├── fr.json            # French translations
 │   └── es.json            # Spanish translations
 ├── src/
-│   ├── index.js           # IINA sandbox plugin entry point (events, RPC client, sidebar sync)
-│   ├── daemon.js          # Detached Node.js daemon (mDNS, ffprobe, FFmpeg HTTP server, CASTV2)
-│   └── i18n.js            # Shared multi-language loader & formatter
+│   ├── daemon/            # Node.js background companion (discovery, compatibility, streamer, subtitles, cast-player)
+│   ├── index/             # IINA sandbox plugin (lifecycle, RPC client, controls mirror, sidebar bridge, menu)
+│   ├── shared/            # Shared modules (i18n loader, wire-format Protobuf protocol)
+│   └── types/             # TypeScript interfaces and RPC payload definitions
+├── test/                  # Automated unit test suite (native node:test, 0 extra npm dependencies)
 └── ui/
     ├── sidebar.html       # Streamlined Chromecast sidebar UI (Devices, Tracks, Cast/Stop)
     └── preferences.html   # Plugin preferences page (Language, Strategy, 4K/HEVC, Bitrate, Paths)

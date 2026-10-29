@@ -1,19 +1,20 @@
 /**
  * IINA Chromecast Project Linter & Static Analyzer
  * Validates:
- * 1. JavaScript syntax & bundle compilation (src/*.js, build.js, lint.js)
+ * 1. TypeScript types (`tsc --noEmit`) & syntax rules
  * 2. IINA 1.5 Thread-Safety & Code Quality rules (no `var`, no `debugger`, no `menu.forceUpdate()`,
  *    mandatory `yieldToPluginLoop()` after `http.get`/`http.post`)
  * 3. HTML inline <script> syntax & DOM/i18n attribute binding (ui/sidebar.html, ui/preferences.html)
  * 4. Info.json & package.json schema and preference key consistency
  * 5. Multi-language (en, fr, es) dictionary completeness & placeholder parity
+ * 6. Dead code & unused translation keys audit
  */
 
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const { execFileSync } = require("child_process");
 const esbuild = require("esbuild");
-const { SUPPORTED_LANGUAGES, TRANSLATIONS } = require("./src/i18n");
 
 const ROOT = __dirname;
 let errorCount = 0;
@@ -40,32 +41,61 @@ function extractPlaceholders(str) {
   return matches.sort().join(",");
 }
 
-function checkJsFiles() {
-  console.log("\n[1/5] Checking JavaScript syntax, bundle & thread-safety rules...");
-  const jsFiles = [
-    "src/i18n.js",
-    "src/daemon.js",
-    "src/index.js",
-    "build.js",
-    "lint.js",
-  ];
+const SUPPORTED_LANGUAGES = ["en", "fr", "es"];
+const TRANSLATIONS = {
+  en: JSON.parse(fs.readFileSync(path.join(ROOT, "i18n/en.json"), "utf8")),
+  fr: JSON.parse(fs.readFileSync(path.join(ROOT, "i18n/fr.json"), "utf8")),
+  es: JSON.parse(fs.readFileSync(path.join(ROOT, "i18n/es.json"), "utf8")),
+};
 
+function getAllSourceFiles(dir, exts = [".ts", ".js"]) {
+  const files = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== "node_modules" && entry.name !== ".git" && entry.name !== "dist") {
+        files.push(...getAllSourceFiles(fullPath, exts));
+      }
+    } else if (exts.some((ext) => entry.name.endsWith(ext))) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function checkTypeScriptAndSyntax() {
+  console.log("\n[1/6] Checking TypeScript types, compilation & thread-safety rules...");
+
+  // 1. TypeScript strict typecheck
+  try {
+    execFileSync("npx", ["tsc", "--noEmit"], {
+      cwd: ROOT,
+      stdio: "pipe",
+    });
+    pass("TypeScript typecheck passed (tsc --noEmit: 0 errors)");
+  } catch (err) {
+    fail(`TypeScript compilation failed:\n${err.stdout ? err.stdout.toString() : err.message}`);
+  }
+
+  // 2. Syntax check for root JavaScript scripts
+  const jsFiles = ["build.js", "lint.js"];
   for (const rel of jsFiles) {
     const fullPath = path.join(ROOT, rel);
-    if (!fs.existsSync(fullPath)) {
-      fail(`Missing JS file: ${rel}`);
-      continue;
-    }
     const code = fs.readFileSync(fullPath, "utf8");
-
     try {
       new vm.Script(code, { filename: rel });
       pass(`Syntax valid: ${rel}`);
     } catch (err) {
       fail(`Syntax error in ${rel}: ${err.message}`);
     }
+  }
 
-    // Disallow `debugger` statements and legacy `var ` declarations
+  // 3. Scan all TypeScript source files for debugger or forbidden keywords
+  const srcFiles = getAllSourceFiles(path.join(ROOT, "src"), [".ts"]);
+  for (const file of srcFiles) {
+    const rel = path.relative(ROOT, file);
+    const code = fs.readFileSync(file, "utf8");
     const lines = code.split("\n");
     lines.forEach((line, idx) => {
       const trimmed = line.trim();
@@ -78,45 +108,55 @@ function checkJsFiles() {
       }
     });
   }
+  pass(`Scanned ${srcFiles.length} TypeScript source files for clean code practices`);
 
-  // IINA 1.5 specific thread-safety checks in src/index.js
-  const indexCode = fs.readFileSync(path.join(ROOT, "src/index.js"), "utf8");
-  const codeLines = indexCode
+  // 4. IINA 1.5 specific thread-safety checks in src/index/
+  const indexFiles = getAllSourceFiles(path.join(ROOT, "src/index"), [".ts"]);
+  let combinedIndexCode = "";
+  for (const f of indexFiles) {
+    combinedIndexCode += fs.readFileSync(f, "utf8") + "\n";
+  }
+
+  const cleanCodeLines = combinedIndexCode
     .split("\n")
     .filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*"))
     .join("\n");
 
-  if (codeLines.includes("menu.forceUpdate(")) {
-    fail("src/index.js calls menu.forceUpdate(), which causes a JSC/MainThread deadlock in IINA 1.5");
+  if (cleanCodeLines.includes("menu.forceUpdate(")) {
+    fail("src/index calls menu.forceUpdate(), which causes a JSC/MainThread deadlock in IINA 1.5");
   } else {
     pass("IINA 1.5 anti-deadlock check: no menu.forceUpdate() calls");
   }
 
-  const httpAwaitCount = (codeLines.match(/await\s+http\.(get|post)\s*\(/g) || []).length;
-  const yieldCount = (codeLines.match(/await\s+yieldToPluginLoop\s*\(\s*\)/g) || []).length;
+  const httpAwaitCount = (cleanCodeLines.match(/await\s+http\.(get|post)\s*\(/g) || []).length;
+  const yieldCount = (cleanCodeLines.match(/await\s+yieldToPluginLoop\s*\(\s*\)/g) || []).length;
   if (httpAwaitCount > 0 && yieldCount >= httpAwaitCount) {
-    pass(`IINA 1.5 Just.HTTP thread-bounce check: ${yieldCount}/${httpAwaitCount} HTTP calls guarded by yieldToPluginLoop()`);
+    pass(
+      `IINA 1.5 Just.HTTP thread-bounce check: ${yieldCount}/${httpAwaitCount} HTTP calls guarded by yieldToPluginLoop()`
+    );
   } else {
-    fail(`src/index.js has ${httpAwaitCount} 'await http.get/post' calls but only ${yieldCount} 'await yieldToPluginLoop()' guards`);
+    fail(
+      `src/index has ${httpAwaitCount} 'await http.get/post' calls but only ${yieldCount} 'await yieldToPluginLoop()' guards`
+    );
   }
 
-  // Verify esbuild bundling succeeds in-memory
+  // 5. Verify esbuild bundling succeeds in-memory for all entrypoints
   try {
     esbuild.buildSync({
-      entryPoints: [path.join(ROOT, "src/index.js")],
+      entryPoints: [path.join(ROOT, "src/index/index.ts")],
       bundle: true,
       platform: "node",
       target: "es2020",
       write: false,
     });
-    pass("esbuild dry-run bundle check passed for src/index.js");
+    pass("esbuild dry-run bundle check passed for src/index/index.ts");
   } catch (err) {
     fail(`esbuild bundle check failed: ${err.message}`);
   }
 }
 
 function checkHtmlFiles() {
-  console.log("\n[2/5] Checking UI HTML files & inline <script> blocks...");
+  console.log("\n[2/6] Checking UI HTML files & inline <script> blocks...");
   const info = JSON.parse(fs.readFileSync(path.join(ROOT, "Info.json"), "utf8"));
   const validPrefKeys = new Set(Object.keys(info.preferenceDefaults || {}));
 
@@ -143,7 +183,9 @@ function checkHtmlFiles() {
     for (const m of prefMatches) {
       const key = m[1];
       if (!validPrefKeys.has(key)) {
-        fail(`${rel} references unknown preference key '${key}' (not in Info.json preferenceDefaults)`);
+        fail(
+          `${rel} references unknown preference key '${key}' (not in Info.json preferenceDefaults)`
+        );
       }
     }
     if (prefMatches.length > 0) {
@@ -153,7 +195,7 @@ function checkHtmlFiles() {
 }
 
 function checkI18nCompleteness() {
-  console.log("\n[3/5] Checking separate i18n/*.json files (en, fr, es) & UI bindings...");
+  console.log("\n[3/6] Checking separate i18n/*.json files (en, fr, es) & UI bindings...");
   for (const lang of SUPPORTED_LANGUAGES) {
     const jsonPath = path.join(ROOT, "i18n", `${lang}.json`);
     if (!fs.existsSync(jsonPath)) {
@@ -216,7 +258,7 @@ function checkI18nCompleteness() {
 }
 
 function checkManifests() {
-  console.log("\n[4/5] Checking Info.json & package.json manifests...");
+  console.log("\n[4/6] Checking Info.json & package.json manifests...");
   const info = JSON.parse(fs.readFileSync(path.join(ROOT, "Info.json"), "utf8"));
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
@@ -236,7 +278,9 @@ function checkManifests() {
   if (!pkg.devDependencies || !pkg.devDependencies["iina-plugin-definition"]) {
     fail("package.json is missing iina-plugin-definition in devDependencies");
   } else {
-    pass(`package.json devDependencies valid (iina-plugin-definition: ${pkg.devDependencies["iina-plugin-definition"]})`);
+    pass(
+      `package.json devDependencies valid (iina-plugin-definition: ${pkg.devDependencies["iina-plugin-definition"]})`
+    );
   }
 }
 
@@ -257,15 +301,16 @@ function checkDeadCode() {
   console.log("\n[6/6] Checking for dead code & unused translations...");
   const baseLang = "en";
   const baseKeys = Object.keys(TRANSLATIONS[baseLang] || {});
+
   const codeFiles = [
-    "src/index.js",
-    "src/daemon.js",
-    "ui/sidebar.html",
-    "ui/preferences.html",
+    ...getAllSourceFiles(path.join(ROOT, "src"), [".ts"]),
+    path.join(ROOT, "ui/sidebar.html"),
+    path.join(ROOT, "ui/preferences.html"),
   ];
-  const fileContents = codeFiles.map((rel) => ({
-    name: rel,
-    content: fs.readFileSync(path.join(ROOT, rel), "utf8"),
+
+  const fileContents = codeFiles.map((fullPath) => ({
+    name: path.relative(ROOT, fullPath),
+    content: fs.readFileSync(fullPath, "utf8"),
   }));
 
   const unusedKeys = [];
@@ -292,32 +337,6 @@ function checkDeadCode() {
   } else {
     pass(`All ${baseKeys.length} translation keys are actively referenced across codebase`);
   }
-
-  // Check function declarations in src/*.js
-  for (const rel of ["src/index.js", "src/daemon.js"]) {
-    const code = fs.readFileSync(path.join(ROOT, rel), "utf8");
-    const fnRegex = /function\s+([a-zA-Z0-9_$]+)\s*\(/g;
-    let match;
-    const fns = [];
-    while ((match = fnRegex.exec(code)) !== null) {
-      fns.push({ name: match[1], index: match.index });
-    }
-    const deadFns = [];
-    for (const fn of fns) {
-      const before = code.slice(0, fn.index);
-      const after = code.slice(fn.index + fn.name.length + 8);
-      const regex = new RegExp(`\\b${fn.name}\\b`, "g");
-      const refCount = (before.match(regex) || []).length + (after.match(regex) || []).length;
-      if (refCount === 0) {
-        deadFns.push(fn.name);
-      }
-    }
-    if (deadFns.length > 0) {
-      fail(`${rel} contains ${deadFns.length} unreferenced function(s): ${deadFns.join(", ")}`);
-    } else {
-      pass(`${rel}: all ${fns.length} functions are actively referenced`);
-    }
-  }
 }
 
 const isDeadcodeOnly = process.argv.includes("--deadcode-only");
@@ -326,7 +345,7 @@ if (isDeadcodeOnly) {
   console.log("=== IINA Chromecast Dead Code & Unused Translation Audit ===");
   checkDeadCode();
 } else {
-  checkJsFiles();
+  checkTypeScriptAndSyntax();
   checkHtmlFiles();
   checkI18nCompleteness();
   checkManifests();

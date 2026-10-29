@@ -154,7 +154,7 @@ async function runBuild() {
 
   // 1. Bundle & minify the Node.js Chromecast & FFmpeg daemon
   await esbuild.build({
-    entryPoints: ["src/daemon.js"],
+    entryPoints: ["src/daemon/daemon.ts"],
     bundle: true,
     minify: true,
     treeShaking: true,
@@ -170,7 +170,7 @@ async function runBuild() {
 
   // 2. Bundle & minify the IINA plugin entry point (resolves dist/daemon.js directly on disk)
   await esbuild.build({
-    entryPoints: ["src/index.js"],
+    entryPoints: ["src/index/index.ts"],
     bundle: true,
     minify: true,
     treeShaking: true,
@@ -183,7 +183,7 @@ async function runBuild() {
 
   // 3. Bundle the shared WebView i18n helper for ui/sidebar.html and ui/preferences.html
   await esbuild.build({
-    entryPoints: ["src/i18n.js"],
+    entryPoints: ["src/shared/i18n.ts"],
     bundle: true,
     minify: true,
     treeShaking: true,
