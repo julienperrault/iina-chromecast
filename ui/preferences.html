@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chromecast Preferences</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 8px 4px;
+    }
+    .pref-section {
+      margin-bottom: 14px;
+    }
+    .pref-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+      display: block;
+    }
+    input[type="text"],
+    select {
+      width: 100%;
+      padding: 5px 8px;
+      margin-top: 3px;
+      box-sizing: border-box;
+    }
+  </style>
+</head>
+<body>
+  <div class="pref-section">
+    <span class="pref-title" data-i18n="pref.lang_title">Interface Language:</span>
+    <select id="pref-lang-select" data-pref-key="language">
+      <option value="auto" data-i18n="pref.lang_auto">Automatic (System default)</option>
+      <option value="en">English</option>
+      <option value="fr">Français</option>
+      <option value="es">Español</option>
+    </select>
+  </div>
+
+  <div class="pref-section">
+    <span class="pref-title" data-i18n="pref.mode_title">Default conversion mode:</span>
+    <select data-pref-key="transcode_mode">
+      <option value="auto" data-i18n="pref.mode_auto">Automatic (Direct if compatible MP4, otherwise Remux or GPU Transcode)</option>
+      <option value="transcode" data-i18n="pref.mode_transcode">Always convert to H.264 + AAC (Maximum compatibility)</option>
+      <option value="direct" data-i18n="pref.mode_direct">Direct Play only (No conversion)</option>
+    </select>
+    <p class="small secondary pref-help" data-i18n="pref.mode_help">
+      In Automatic mode, MKV/AVI files already containing a compatible video stream are remuxed on the fly with zero quality loss or CPU load.
+    </p>
+  </div>
+
+  <div class="pref-section">
+    <span class="pref-title" data-i18n="pref.hevc_title">Chromecast 4K / HEVC (H.265) Support:</span>
+    <select data-pref-key="allow_4k_hevc">
+      <option value="auto" data-i18n="pref.hevc_auto">Automatic (Detects Chromecast Ultra, Google TV, 4K Android TV)</option>
+      <option value="always" data-i18n="pref.hevc_always">Always preserve HEVC / 4K without transcoding video</option>
+      <option value="never" data-i18n="pref.hevc_never">Always convert HEVC to H.264 (Older Chromecasts)</option>
+    </select>
+  </div>
+
+  <div class="pref-section">
+    <span class="pref-title" data-i18n="pref.bitrate_title">Video transcoding bitrate:</span>
+    <input type="text" data-pref-key="video_quality" placeholder="8M" />
+    <p class="small secondary pref-help" data-i18n="pref.bitrate_help">
+      Examples: 5M (fast, lightweight), 8M (recommended 1080p), 12M (high quality).
+    </p>
+  </div>
+
+  <div class="pref-section">
+    <span class="pref-title" data-i18n="pref.resolution_title">Maximum transcoding resolution:</span>
+    <select data-pref-key="max_resolution">
+      <option value="1080" data-i18n="pref.res_1080">1080p (Full HD - Recommended)</option>
+      <option value="720" data-i18n="pref.res_720">720p (HD - Lower CPU / Slow Wi-Fi)</option>
+      <option value="2160" data-i18n="pref.res_2160">2160p (4K Ultra HD)</option>
+    </select>
+  </div>
+
+  <div class="pref-section">
+    <label>
+      <input type="checkbox" data-type="bool" data-pref-key="mirror_iina_controls" />
+      <span data-i18n="pref.mirror_controls">Mirror native IINA controls (Space/Pause, Seek and Volume in IINA control the Chromecast)</span>
+    </label>
+  </div>
+
+  <div class="pref-section">
+    <label>
+      <input type="checkbox" data-type="bool" data-pref-key="auto_next_playlist" />
+      <span data-i18n="pref.auto_next">Automatically play the next IINA Playlist episode on Chromecast</span>
+    </label>
+  </div>
+
+  <div class="pref-section">
+    <label>
+      <input type="checkbox" data-type="bool" data-pref-key="enable_subtitles" />
+      <span data-i18n="pref.enable_subs">Automatically convert and stream subtitles (SRT/ASS → WebVTT)</span>
+    </label>
+  </div>
+
+  <div class="pref-section">
+    <label>
+      <input type="checkbox" data-type="bool" data-pref-key="resume_from_position" />
+      <span data-i18n="pref.resume_pos">Resume playback on Chromecast from current IINA position</span>
+    </label>
+  </div>
+
+  <div class="pref-section">
+    <label>
+      <input type="checkbox" data-type="bool" data-pref-key="pause_local_on_cast" />
+      <span data-i18n="pref.pause_local">Automatically pause IINA when starting Cast</span>
+    </label>
+  </div>
+
+  <div class="pref-section">
+    <span class="pref-title" data-i18n="pref.ffmpeg_path">Custom path to FFmpeg (optional):</span>
+    <input type="text" data-pref-key="ffmpeg_path" placeholder="/opt/homebrew/bin/ffmpeg" />
+  </div>
+
+  <div class="pref-section">
+    <span class="pref-title" data-i18n="pref.node_path">Custom path to Node.js (optional):</span>
+    <input type="text" data-pref-key="node_path" placeholder="/opt/homebrew/bin/node" />
+  </div>
+
+  <script src="../dist/i18n-ui.js"></script>
+  <script>
+    const i18n = window.IINA_CHROMECAST_I18N;
+
+    function applyPrefTranslations(selectedLang) {
+      if (!i18n) return;
+      const lang = i18n.resolveLanguage(
+        selectedLang === "auto" ? null : selectedLang
+      );
+      document.documentElement.lang = lang;
+      for (const el of document.querySelectorAll("[data-i18n]")) {
+        const key = el.getAttribute("data-i18n");
+        el.textContent = i18n.t(lang, key);
+      }
+    }
+
+    const langSelect = document.getElementById("pref-lang-select");
+    if (langSelect) {
+      langSelect.addEventListener("change", (e) => {
+        applyPrefTranslations(e.target.value);
+      });
+    }
+    applyPrefTranslations("auto");
+  </script>
+</body>
+</html>

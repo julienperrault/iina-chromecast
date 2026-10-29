@@ -1,0 +1,63 @@
+{
+  "name": "Chromecast",
+  "identifier": "io.iina.chromecast",
+  "version": "1.0.0",
+  "ghRepo": "julienperrault/iina-chromecast",
+  "ghVersion": 1,
+  "description": "Cast videos to Chromecast devices with automatic on-the-fly remuxing, 4K/HEVC profiles, live track switching, playlist auto-advance, and native IINA control mirroring.",
+  "author": {
+    "name": "Julien Perrault",
+    "url": "https://github.com/julienperrault"
+  },
+  "entry": "dist/index.js",
+  "preferencesPage": "ui/preferences.html",
+  "preferenceDefaults": {
+    "language": "auto",
+    "transcode_mode": "auto",
+    "allow_4k_hevc": "auto",
+    "video_quality": "8M",
+    "max_resolution": "1080",
+    "enable_subtitles": true,
+    "pause_local_on_cast": true,
+    "resume_from_position": true,
+    "mirror_iina_controls": true,
+    "auto_next_playlist": true,
+    "ffmpeg_path": "",
+    "node_path": ""
+  },
+  "sidebarTab": {
+    "name": "Chromecast"
+  },
+  "permissions": [
+    "show-osd",
+    "show-alert",
+    "network-request",
+    "file-system"
+  ],
+  "allowedDomains": [
+    "*"
+  ],
+  "localized": {
+    "en": {
+      "name": "Chromecast",
+      "description": "Cast videos to Chromecast devices with automatic on-the-fly remuxing, 4K/HEVC profiles, live track switching, and native IINA controls.",
+      "sidebarTab": {
+        "name": "Chromecast"
+      }
+    },
+    "fr": {
+      "name": "Chromecast",
+      "description": "Diffusez vos vidéos sur Chromecast avec conversion à la volée, profils 4K/HEVC, sélection de pistes et contrôle natif IINA.",
+      "sidebarTab": {
+        "name": "Chromecast"
+      }
+    },
+    "es": {
+      "name": "Chromecast",
+      "description": "Transmite tus vídeos a Chromecast con conversión en tiempo real, perfiles 4K/HEVC, selección de pistas y control nativo de IINA.",
+      "sidebarTab": {
+        "name": "Chromecast"
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "iina-chromecast",
+  "version": "1.0.0",
+  "description": "Plugin Chromecast pour IINA avec remuxing et conversion matérielle H.264 à la volée",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "node build.js",
+    "lint": "node lint.js",
+    "check": "node lint.js && node build.js",
+    "link": "ln -sfn \"$PWD\" \"$HOME/Library/Application Support/com.colliderli.iina/plugins/io.iina.chromecast.iinaplugin-dev\"",
+    "package": "node lint.js && node build.js && rm -f iina-chromecast.iinaplugin.zip && zip -r iina-chromecast.iinaplugin.zip Info.json dist ui i18n README.md docs"
+  },
+  "keywords": [
+    "iina",
+    "plugin",
+    "chromecast",
+    "cast",
+    "ffmpeg",
+    "transcode"
+  ],
+  "author": "Julien",
+  "license": "GPL-3.0-or-later",
+  "type": "commonjs",
+  "dependencies": {
+    "castv2-client": "^1.2.0",
+    "multicast-dns": "^7.2.5"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "iina-plugin-definition": "^0.99.4"
+  }
+}

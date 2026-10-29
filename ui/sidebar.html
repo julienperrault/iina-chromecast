@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chromecast</title>
+  <style>
+    :root {
+      --bg-card: rgba(255, 255, 255, 0.07);
+      --bg-card-hover: rgba(255, 255, 255, 0.12);
+      --border-color: rgba(255, 255, 255, 0.12);
+      --text-primary: #f5f5f7;
+      --text-secondary: rgba(235, 235, 245, 0.6);
+      --accent: #0a84ff;
+      --accent-hover: #409cff;
+      --success: #30d158;
+      --warning: #ff9f0a;
+      --danger: #ff453a;
+      --purple: #bf5af2;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg-card: rgba(0, 0, 0, 0.05);
+        --bg-card-hover: rgba(0, 0, 0, 0.09);
+        --border-color: rgba(0, 0, 0, 0.12);
+        --text-primary: #1d1d1f;
+        --text-secondary: rgba(60, 60, 67, 0.65);
+        --accent: #007aff;
+        --accent-hover: #0062cc;
+        --success: #28cd41;
+        --warning: #ff9500;
+        --danger: #ff3b30;
+        --purple: #af52de;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      font-size: 12px;
+      color: var(--text-primary);
+      padding: 12px;
+      background: transparent;
+      line-height: 1.4;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes pulseGlow {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.55; }
+    }
+
+    @keyframes flashConfirm {
+      0% { border-color: var(--success); box-shadow: 0 0 0 2px rgba(48, 209, 88, 0.28); }
+      100% { border-color: var(--border-color); box-shadow: none; }
+    }
+
+    .section {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 11px;
+      transition: border-color 0.25s ease, box-shadow 0.25s ease;
+    }
+
+    .section.flash-success {
+      animation: flashConfirm 0.9s ease-out;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--text-secondary);
+    }
+
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(10, 132, 255, 0.1);
+      border: 1px solid transparent;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      transition: all 0.15s ease;
+    }
+
+    .icon-btn:hover {
+      background: rgba(10, 132, 255, 0.18);
+    }
+
+    .icon-btn:active {
+      transform: scale(0.96);
+    }
+
+    .icon-btn.scanning {
+      background: rgba(10, 132, 255, 0.2);
+      border-color: rgba(10, 132, 255, 0.4);
+      pointer-events: none;
+    }
+
+    .icon-btn.scan-done {
+      background: rgba(48, 209, 88, 0.18);
+      color: var(--success);
+      border-color: rgba(48, 209, 88, 0.35);
+    }
+
+    .spin-icon {
+      display: inline-block;
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .icon-btn.scanning .spin-icon {
+      animation: spin 0.75s linear infinite;
+    }
+
+    /* Toast Feedback Banner */
+    .toast-feedback {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      font-size: 11.5px;
+      font-weight: 600;
+      margin-bottom: 10px;
+      border: 1px solid var(--border-color);
+      background: rgba(28, 28, 30, 0.85);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      opacity: 0;
+      transform: translateY(-4px);
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      max-height: 0;
+      overflow: hidden;
+      padding-top: 0;
+      padding-bottom: 0;
+      margin-bottom: 0;
+      border-width: 0;
+    }
+
+    .toast-feedback.visible {
+      opacity: 1;
+      transform: translateY(0);
+      max-height: 60px;
+      padding: 7px 10px;
+      margin-bottom: 10px;
+      border-width: 1px;
+    }
+
+    .toast-feedback.success {
+      background: rgba(48, 209, 88, 0.16);
+      border-color: rgba(48, 209, 88, 0.4);
+      color: var(--success);
+    }
+
+    .toast-feedback.info {
+      background: rgba(10, 132, 255, 0.16);
+      border-color: rgba(10, 132, 255, 0.4);
+      color: var(--accent);
+    }
+
+    .toast-feedback.loading {
+      background: rgba(10, 132, 255, 0.16);
+      border-color: rgba(10, 132, 255, 0.4);
+      color: var(--accent);
+    }
+
+    .toast-feedback.warning {
+      background: rgba(255, 159, 10, 0.16);
+      border-color: rgba(255, 159, 10, 0.4);
+      color: var(--warning);
+    }
+
+    .toast-spinner {
+      width: 11px;
+      height: 11px;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    /* Device List */
+    .device-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: opacity 0.2s ease;
+    }
+
+    .device-list.scanning-pulse {
+      animation: pulseGlow 1s ease-in-out infinite;
+    }
+
+    .device-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      background: rgba(128, 128, 128, 0.08);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .device-item:hover {
+      background: var(--bg-card-hover);
+    }
+
+    .device-item:active {
+      transform: scale(0.99);
+    }
+
+    .device-item.selected {
+      border-color: var(--accent);
+      background: rgba(10, 132, 255, 0.14);
+    }
+
+    .device-item.active-cast {
+      border-color: var(--success);
+      background: rgba(48, 209, 88, 0.14);
+    }
+
+    .device-info {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .device-name-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .device-name {
+      font-weight: 600;
+      font-size: 12.5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tag-4k {
+      font-size: 9.5px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(191, 90, 242, 0.2);
+      color: var(--purple);
+      flex-shrink: 0;
+    }
+
+    .device-meta {
+      font-size: 10.5px;
+      color: var(--text-secondary);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-secondary);
+      flex-shrink: 0;
+      transition: all 0.2s ease;
+    }
+
+    .device-item.selected .status-dot {
+      background: var(--accent);
+    }
+
+    .device-item.active-cast .status-dot {
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+    }
+
+    .empty-state {
+      text-align: center;
+      color: var(--text-secondary);
+      padding: 12px 6px;
+      font-size: 11.5px;
+    }
+
+    /* Selectors */
+    .select-group {
+      margin-top: 7px;
+    }
+
+    .select-group label {
+      display: block;
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-bottom: 3px;
+    }
+
+    select {
+      width: 100%;
+      padding: 5px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      background: rgba(128, 128, 128, 0.12);
+      color: var(--text-primary);
+      font-size: 11.5px;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    select.select-confirmed {
+      animation: flashConfirm 0.8s ease-out;
+    }
+
+    /* Primary Cast / Stop Buttons & Info Note */
+    .btn-primary {
+      width: 100%;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-size: 12.5px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      transition: background 0.15s ease, transform 0.1s ease, opacity 0.15s ease;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+
+    .btn-primary:active {
+      transform: scale(0.985);
+    }
+
+    .btn-primary.connecting {
+      opacity: 0.85;
+      pointer-events: none;
+    }
+
+    .btn-danger {
+      width: 100%;
+      padding: 7px 12px;
+      border: 1px solid var(--danger);
+      border-radius: 8px;
+      background: rgba(255, 69, 58, 0.15);
+      color: var(--danger);
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      margin-top: 7px;
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+
+    .btn-danger:hover {
+      background: rgba(255, 69, 58, 0.25);
+    }
+
+    .btn-danger:active {
+      transform: scale(0.985);
+    }
+
+    .hint-mirror {
+      font-size: 10.5px;
+      color: var(--text-secondary);
+      text-align: center;
+      margin-top: 8px;
+    }
+
+    .settings-info-box {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(10, 132, 255, 0.08);
+      border: 1px solid rgba(10, 132, 255, 0.2);
+      color: var(--text-secondary);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .error-banner {
+      background: rgba(255, 69, 58, 0.18);
+      border: 1px solid var(--danger);
+      color: var(--danger);
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 11px;
+      margin-bottom: 10px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="error-banner" class="error-banner"></div>
+  <div id="toast-feedback" class="toast-feedback">
+    <span id="toast-icon"></span>
+    <span id="toast-text"></span>
+  </div>
+
+  <!-- 1. Chromecast Devices -->
+  <div id="devices-section" class="section">
+    <div class="section-header">
+      <span data-i18n="ui.devices_title">Chromecast Devices</span>
+      <button id="btn-scan" class="icon-btn" title="Search on local network">
+        <span id="scan-icon" class="spin-icon">↻</span>
+        <span id="scan-label" data-i18n="ui.scan_btn">Refresh</span>
+      </button>
+    </div>
+    <div id="device-list" class="device-list">
+      <div class="empty-state" data-i18n="ui.devices_searching">Searching for devices on local network...</div>
+    </div>
+  </div>
+
+  <!-- 2. Audio & Subtitle Tracks -->
+  <div class="section">
+    <div class="section-header">
+      <span data-i18n="ui.tracks_title">Audio & Subtitle Tracks</span>
+    </div>
+
+    <div class="select-group" style="margin-top: 0;">
+      <label for="audio-select" data-i18n="ui.audio_label">Audio Track:</label>
+      <select id="audio-select">
+        <option value="" data-i18n="ui.audio_default">Default audio track</option>
+      </select>
+    </div>
+
+    <div class="select-group">
+      <label for="sub-select" data-i18n="ui.sub_label">Subtitles:</label>
+      <select id="sub-select">
+        <option value="none" data-i18n="ui.sub_disabled">Disabled</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- 3. Cast Action & Settings Info Note -->
+  <div class="section">
+    <button id="btn-cast" class="btn-primary" data-i18n="ui.btn_cast">Cast to Chromecast</button>
+    <button id="btn-stop" class="btn-danger" style="display: none;" data-i18n="ui.btn_stop">Stop streaming</button>
+    <div id="mirror-hint" class="hint-mirror" style="display: none;" data-i18n="ui.mirror_hint">
+      💡 Native IINA controls drive the Chromecast live.
+    </div>
+    <div id="settings-info" class="settings-info-box" data-i18n="ui.settings_info">
+      ℹ️ Conversion, 4K/HEVC and language options are available in IINA Settings (Plugins > Chromecast).
+    </div>
+  </div>
+
+  <script src="../dist/i18n-ui.js"></script>
+  <script>
+    const i18n = window.IINA_CHROMECAST_I18N;
+    let currentLang = i18n ? i18n.resolveLanguage("auto") : "en";
+
+    function tr(key, params = {}) {
+      return i18n ? i18n.t(currentLang, key, params) : key;
+    }
+
+    let uiState = {
+      devices: [],
+      selectedDeviceId: null,
+      activeDevice: null,
+      castState: "IDLE",
+      isScanning: false,
+    };
+
+    const dom = {
+      errorBanner: document.getElementById("error-banner"),
+      toast: document.getElementById("toast-feedback"),
+      toastIcon: document.getElementById("toast-icon"),
+      toastText: document.getElementById("toast-text"),
+      devicesSection: document.getElementById("devices-section"),
+      btnScan: document.getElementById("btn-scan"),
+      scanIcon: document.getElementById("scan-icon"),
+      scanLabel: document.getElementById("scan-label"),
+      deviceList: document.getElementById("device-list"),
+      audioSelect: document.getElementById("audio-select"),
+      subSelect: document.getElementById("sub-select"),
+      btnCast: document.getElementById("btn-cast"),
+      btnStop: document.getElementById("btn-stop"),
+      mirrorHint: document.getElementById("mirror-hint"),
+    };
+
+    let lastDevicesSig = "";
+    let lastAudioTracksSig = "";
+    let lastSubTracksSig = "";
+    let toastTimer = null;
+    let scanResetTimer = null;
+
+    function applyStaticTranslations() {
+      document.documentElement.lang = currentLang;
+      const elements = document.querySelectorAll("[data-i18n]");
+      for (const el of elements) {
+        const key = el.getAttribute("data-i18n");
+        if (el === dom.scanLabel && uiState.isScanning) continue;
+        el.textContent = tr(key);
+      }
+      dom.btnScan.title = tr("ui.scan_title");
+      lastDevicesSig = "";
+      lastAudioTracksSig = "";
+      lastSubTracksSig = "";
+    }
+
+    function showToast(type, message, durationMs = 2400) {
+      if (toastTimer) clearTimeout(toastTimer);
+      dom.toast.className = `toast-feedback visible ${type || "info"}`;
+      if (type === "loading") {
+        dom.toastIcon.innerHTML = `<span class="toast-spinner"></span>`;
+      } else if (type === "success") {
+        dom.toastIcon.textContent = "✓";
+      } else if (type === "warning") {
+        dom.toastIcon.textContent = "⚠";
+      } else {
+        dom.toastIcon.textContent = "ℹ";
+      }
+      dom.toastText.textContent = message;
+
+      if (durationMs > 0) {
+        toastTimer = setTimeout(() => {
+          dom.toast.classList.remove("visible");
+        }, durationMs);
+      }
+    }
+
+    function flashElement(el, className = "select-confirmed") {
+      if (!el) return;
+      el.classList.remove(className);
+      void el.offsetWidth;
+      el.classList.add(className);
+    }
+
+    function setScanningState(scanning, completedCount = null) {
+      uiState.isScanning = scanning;
+      if (scanResetTimer) clearTimeout(scanResetTimer);
+
+      if (scanning) {
+        dom.btnScan.classList.remove("scan-done");
+        dom.btnScan.classList.add("scanning");
+        dom.scanIcon.textContent = "↻";
+        dom.scanLabel.textContent = tr("ui.scan_searching");
+        dom.deviceList.classList.add("scanning-pulse");
+      } else {
+        dom.btnScan.classList.remove("scanning");
+        dom.deviceList.classList.remove("scanning-pulse");
+
+        if (completedCount !== null) {
+          dom.btnScan.classList.add("scan-done");
+          dom.scanIcon.textContent = "✓";
+          dom.scanLabel.textContent =
+            completedCount > 0
+              ? tr("ui.scan_found", { count: completedCount })
+              : tr("ui.scan_done");
+          flashElement(dom.devicesSection, "flash-success");
+
+          scanResetTimer = setTimeout(() => {
+            dom.btnScan.classList.remove("scan-done");
+            dom.scanIcon.textContent = "↻";
+            dom.scanLabel.textContent = tr("ui.scan_btn");
+          }, 1800);
+        } else {
+          dom.scanIcon.textContent = "↻";
+          dom.scanLabel.textContent = tr("ui.scan_btn");
+        }
+      }
+    }
+
+    function renderDevices() {
+      const devices = uiState.devices || [];
+      const sig = JSON.stringify(
+        devices.map((d) => ({
+          id: d.id,
+          name: d.name,
+          model: d.model,
+          host: d.host,
+          s4k: d.supports4kHevc,
+        }))
+      );
+
+      if (devices.length === 0) {
+        if (lastDevicesSig !== "EMPTY") {
+          lastDevicesSig = "EMPTY";
+          dom.deviceList.innerHTML = `<div class="empty-state">${tr("ui.devices_empty")}</div>`;
+        }
+        return;
+      }
+
+      if (sig !== lastDevicesSig) {
+        lastDevicesSig = sig;
+        dom.deviceList.innerHTML = "";
+        for (const dev of devices) {
+          const tag4k = dev.supports4kHevc ? `<span class="tag-4k">4K / HEVC</span>` : "";
+          const row = document.createElement("div");
+          row.dataset.deviceId = dev.id;
+          row.className = "device-item";
+          row.innerHTML = `
+            <div class="device-info">
+              <div class="device-name-row">
+                <span class="device-name"></span>
+                ${tag4k}
+              </div>
+              <div class="device-meta"></div>
+            </div>
+            <div class="status-dot"></div>
+          `;
+          row.querySelector(".device-name").textContent = dev.name;
+          row.querySelector(".device-meta").textContent = `${dev.model} • ${dev.host}`;
+
+          row.addEventListener("click", () => {
+            uiState.selectedDeviceId = dev.id;
+            iina.postMessage("select_device", { deviceId: dev.id });
+            renderDevices();
+          });
+          dom.deviceList.appendChild(row);
+        }
+      }
+
+      const rows = dom.deviceList.querySelectorAll(".device-item");
+      for (const row of rows) {
+        const id = row.dataset.deviceId;
+        const isSelected = uiState.selectedDeviceId === id;
+        const isActive = Boolean(uiState.activeDevice && uiState.activeDevice.id === id);
+        row.classList.toggle("selected", isSelected);
+        row.classList.toggle("active-cast", isActive);
+      }
+    }
+
+    function renderTracks(data) {
+      const summary = data.mediaInfo || data.probeCompatibility?.summary;
+      const audioTracks = summary?.audioTracks || [];
+      const subtitleTracks = summary?.subtitleTracks || [];
+
+      const audioSig = JSON.stringify({
+        lang: currentLang,
+        tracks: audioTracks.map((t) => [t.streamIndex, t.label]),
+      });
+      if (audioSig !== lastAudioTracksSig) {
+        lastAudioTracksSig = audioSig;
+        dom.audioSelect.innerHTML = "";
+        if (audioTracks.length > 0) {
+          for (const t of audioTracks) {
+            const opt = document.createElement("option");
+            opt.value = String(t.streamIndex);
+            opt.textContent = t.label;
+            dom.audioSelect.appendChild(opt);
+          }
+        } else {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = tr("ui.audio_default");
+          dom.audioSelect.appendChild(opt);
+        }
+      }
+      if (document.activeElement !== dom.audioSelect) {
+        const targetAudioVal =
+          data.selectedAudioStreamIndex !== null && data.selectedAudioStreamIndex !== undefined
+            ? String(data.selectedAudioStreamIndex)
+            : "";
+        if (dom.audioSelect.value !== targetAudioVal && audioTracks.length > 0) {
+          dom.audioSelect.value = targetAudioVal;
+        }
+      }
+
+      const subSig = JSON.stringify({
+        lang: currentLang,
+        ext: data.externalSubtitleName || null,
+        tracks: subtitleTracks.map((s) => [s.streamIndex, s.label]),
+      });
+      if (subSig !== lastSubTracksSig) {
+        lastSubTracksSig = subSig;
+        dom.subSelect.innerHTML = "";
+
+        const noneOpt = document.createElement("option");
+        noneOpt.value = "none";
+        noneOpt.textContent = tr("ui.sub_disabled");
+        dom.subSelect.appendChild(noneOpt);
+
+        if (data.externalSubtitleName) {
+          const extOpt = document.createElement("option");
+          extOpt.value = "external";
+          extOpt.textContent = tr("ui.sub_external", { name: data.externalSubtitleName });
+          dom.subSelect.appendChild(extOpt);
+        }
+
+        for (const s of subtitleTracks) {
+          const opt = document.createElement("option");
+          opt.value = String(s.streamIndex);
+          opt.textContent = s.label;
+          dom.subSelect.appendChild(opt);
+        }
+      }
+      if (document.activeElement !== dom.subSelect) {
+        const targetSubVal =
+          data.selectedSubtitleStreamIndex !== null &&
+          data.selectedSubtitleStreamIndex !== undefined
+            ? String(data.selectedSubtitleStreamIndex)
+            : "none";
+        if (dom.subSelect.value !== targetSubVal) {
+          dom.subSelect.value = targetSubVal;
+        }
+      }
+    }
+
+    function renderCastActions(data) {
+      const isConnecting =
+        data.castState === "CONNECTING" || data.castState === "ANALYZING";
+      const isCasting =
+        data.activeDevice &&
+        ["PLAYING", "PAUSED", "BUFFERING", "CONNECTING", "ANALYZING"].includes(data.castState);
+
+      if (isConnecting) {
+        dom.btnCast.classList.add("connecting");
+        dom.btnCast.innerHTML = `<span class="toast-spinner"></span><span>${tr("ui.btn_connecting")}</span>`;
+      } else {
+        dom.btnCast.classList.remove("connecting");
+        dom.btnCast.textContent = isCasting
+          ? tr("ui.btn_recast", { name: data.activeDevice.name })
+          : tr("ui.btn_cast");
+      }
+
+      dom.btnStop.style.display = isCasting ? "block" : "none";
+      dom.mirrorHint.style.display = isCasting && data.mirrorControlsPref !== false ? "block" : "none";
+    }
+
+    applyStaticTranslations();
+
+    dom.btnScan.addEventListener("click", () => {
+      setScanningState(true);
+      showToast("loading", tr("ui.toast_scanning"), 3000);
+      iina.postMessage("scan_devices", {});
+    });
+
+    dom.audioSelect.addEventListener("change", (e) => {
+      flashElement(dom.audioSelect);
+      iina.postMessage("select_tracks", {
+        audioStreamIndex: e.target.value,
+      });
+    });
+
+    dom.subSelect.addEventListener("change", (e) => {
+      flashElement(dom.subSelect);
+      const val = e.target.value;
+      iina.postMessage("select_tracks", {
+        subtitleStreamIndex: val === "none" || val === "external" ? val : Number(val),
+      });
+    });
+
+    dom.btnCast.addEventListener("click", () => {
+      dom.btnCast.classList.add("connecting");
+      dom.btnCast.innerHTML = `<span class="toast-spinner"></span><span>${tr("ui.btn_connecting")}</span>`;
+      iina.postMessage("start_cast", {
+        deviceId: uiState.selectedDeviceId,
+      });
+    });
+
+    dom.btnStop.addEventListener("click", () => {
+      iina.postMessage("stop_cast", {});
+    });
+
+    if (window.iina) {
+      iina.onMessage("action_feedback", (fb) => {
+        if (!fb) return;
+        if (fb.scanCompleted) {
+          setScanningState(false, fb.deviceCount ?? 0);
+        }
+        if (fb.message) {
+          showToast(fb.type || "info", fb.message, fb.type === "loading" ? 4000 : 2400);
+        }
+      });
+
+      iina.onMessage("state_update", (data) => {
+        uiState = {
+          ...uiState,
+          ...data,
+        };
+
+        if (data.resolvedLang && data.resolvedLang !== currentLang) {
+          currentLang = data.resolvedLang;
+          applyStaticTranslations();
+        }
+
+        if (data.error) {
+          dom.errorBanner.style.display = "block";
+          dom.errorBanner.textContent = data.error;
+        } else {
+          dom.errorBanner.style.display = "none";
+        }
+
+        renderDevices();
+        renderTracks(data);
+        renderCastActions(data);
+      });
+
+      iina.postMessage("ui_ready", {
+        systemLocale: navigator.language || "en",
+      });
+    }
+  </script>
+</body>
+</html>
