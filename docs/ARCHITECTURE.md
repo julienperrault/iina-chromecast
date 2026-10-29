@@ -22,9 +22,9 @@ Because IINA's JavaScript plugin environment runs inside **JavaScriptCore (`JSC`
 flowchart TB
   subgraph IINA["IINA 1.5 Application (macOS)"]
     MPV["MPV Player Core\n(MPVController / mpv queue)"]
-    JSC["Plugin Sandbox (src/index.js)\nJavaScriptCore VM"]
+    JSC["Plugin Sandbox (src/index/)\nJavaScriptCore VM"]
     UI["Sidebar & Preferences WebViews\n(ui/sidebar.html, ui/preferences.html)"]
-    I18N["i18n Engine (src/i18n.js)\nEnglish / Français / Español"]
+    I18N["i18n Dictionaries (i18n/*.json)\nEnglish / Français / Español"]
 
     MPV <-->|"Events & Commands\n(debounced / non-reentrant)"| JSC
     JSC <-->|"postMessage / onMessage\n(JSON diffed state)"| UI
@@ -32,7 +32,7 @@ flowchart TB
     I18N --> UI
   end
 
-  subgraph Daemon["Detached Node.js Companion Daemon (src/daemon.js)"]
+  subgraph Daemon["Detached Node.js Companion Daemon (src/daemon/)"]
     RPC["Control Server\n127.0.0.1:45890 (/state, /rpc)"]
     MDNS["mDNS Discovery\n(_googlecast._tcp.local)"]
     PROBE["Codec Analyzer\n(ffprobe + LRU Cache)"]
@@ -50,7 +50,7 @@ flowchart TB
     TV["Chromecast / Google TV / Android TV\n(1080p H.264 or 4K HEVC)"]
   end
 
-  JSC -->|"1. Spawn once (--spawn-daemon <50ms)"| Daemon
+  JSC -->|"1. Spawn once (--spawn-daemon <30ms)"| Daemon
   JSC <-->|"2. Non-blocking HTTP RPC + yieldToPluginLoop()"| RPC
   MDNS <-->|"UDP 224.0.0.251:5353"| TV
   CASTV2 <-->|"TLS Port 8009 (LOAD / PLAY / PAUSE / SEEK)"| TV
@@ -79,17 +79,17 @@ sequenceDiagram
   participant Main as IINA MainThread (UI)
   participant MPV as MPVQueue (MPVController)
   participant Just as Just.HTTP Thread
-  participant Loop as Plugin Timer RunLoop (index.js)
+  participant PluginLoop as Plugin RunLoop (src/index/)
   participant Daemon as Node.js Daemon (127.0.0.1:45890)
 
-  Note over Loop,Daemon: Polling or RPC Request
-  Loop->>Just: http.get("http://127.0.0.1:45890/state")
+  Note over PluginLoop,Daemon: Polling or RPC Request
+  PluginLoop->>Just: http.get("http://127.0.0.1:45890/state")
   Just->>Daemon: TCP GET /state
   Daemon-->>Just: 200 OK (JSON Snapshot)
-  Just->>Loop: Promise resolves -> setTimeout(resolve, 0)
+  Just->>PluginLoop: Promise resolves -> setTimeout(resolve, 0)
   Note right of Just: Just.HTTP thread releases JSC lock immediately!
-  Loop->>Main: sidebar.postMessage("state_update", payload)
-  Loop->>MPV: core.seekTo(snap.currentTime) (only if PLAYING & not transitioning)
+  PluginLoop->>Main: sidebar.postMessage("state_update", payload)
+  PluginLoop->>MPV: core.seekTo(snap.currentTime) (only if PLAYING & not transitioning)
 ```
 
 ---
@@ -115,7 +115,7 @@ flowchart TD
 ```
 
 ### Audio / Video Sync Guarantees (`Remux` & `Transcode`)
-In [`handleVideoRequest()`](../src/daemon.js#L833-L1011), fragmented MP4 (`fMP4`) streaming uses specific FFmpeg flags to eliminate A/V desynchronization:
+In [`handleVideoRequest()`](../src/daemon/streamer.ts), fragmented MP4 (`fMP4`) streaming uses specific FFmpeg flags to eliminate A/V desynchronization:
 - **`-noaccurate_seek` before `-ss <start>` (in Remux mode)**: When copying video (`-c:v copy`), FFmpeg must start at the nearest preceding keyframe. Without `-noaccurate_seek`, FFmpeg drops audio samples between that keyframe and `<start>` while keeping the video frames, creating a 1–5 second audio lag.
 - **`-af aresample=async=1`**: Automatically compensates for timestamp drift or gaps when transcoding audio (`AC3`/`EAC3`/`DTS` → `AAC`).
 - **`-avoid_negative_ts make_zero`** + **`-movflags frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets`**: Ensures clean PTS/CTS alignment from `0.000s` in the fragmented MP4 container.
@@ -131,8 +131,8 @@ sequenceDiagram
   autonumber
   participant User as User / Playlist Auto-Advance
   participant MPV as IINA MPV Core
-  participant Index as Plugin (src/index.js)
-  participant Daemon as Daemon (src/daemon.js)
+  participant Index as Plugin (src/index/)
+  participant Daemon as Daemon (src/daemon/)
   participant Cast as Chromecast Device
 
   User->>MPV: Click "Next Track" (or auto_next_playlist)
@@ -156,14 +156,11 @@ sequenceDiagram
 
 ---
 
-## 5. Multi-Language Architecture (`src/i18n.js`)
+## 5. Multi-Language Architecture (`i18n/*.json`)
 
-All user-facing strings across the plugin are centralized in [`src/i18n.js`](../src/i18n.js) and [`Info.json`](../Info.json):
+All localized strings are stored in separate, clean JSON dictionaries:
+- [`i18n/en.json`](../i18n/en.json) (English, default fallback)
+- [`i18n/fr.json`](../i18n/fr.json) (French)
+- [`i18n/es.json`](../i18n/es.json) (Spanish)
 
-| Language Code | Language | Coverage |
-| :--- | :--- | :--- |
-| **`en`** | English (Default fallback) | Menu items, OSD notifications, Sidebar UI, Preferences UI, Codec diagnostics, Error messages |
-| **`fr`** | Français | Menu items, OSD notifications, Sidebar UI, Preferences UI, Codec diagnostics, Error messages |
-| **`es`** | Español | Menu items, OSD notifications, Sidebar UI, Preferences UI, Codec diagnostics, Error messages |
-
-The linter ([`lint.js`](../lint.js)) automatically verifies that every translation key and `{placeholder}` variable exists across all three languages (`en`, `fr`, `es`) before every build.
+A lightweight shared formatter in [`src/shared/i18n.ts`](../src/shared/i18n.ts) provides parameter substitution (`t(lang, "key", { param })`) and automatic fallback to English if a key is missing. The static analyzer ([`lint.js`](../lint.js)) automatically validates 100% key and placeholder parity across all three languages before every build.

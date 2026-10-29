@@ -1,6 +1,7 @@
 /**
  * Wire-format Protocol Buffers encoder/decoder for Google Cast CASTV2 CastMessage
- * Replaces protobufjs + long (saving 90+ KB of dependencies)
+ * Replaces protobufjs + long (saving 90+ KB of dependencies).
+ * The bundler (build.js) aliases `castv2/lib/proto.js` to this module.
  */
 
 export interface CastMessagePayload {
@@ -13,8 +14,60 @@ export interface CastMessagePayload {
   payloadBinary?: Buffer;
 }
 
+// Field tags: (fieldNumber << 3) | wireType
+const TAG_PROTOCOL_VERSION = 0x08;
+const TAG_SOURCE_ID = 0x12;
+const TAG_DESTINATION_ID = 0x1a;
+const TAG_NAMESPACE = 0x22;
+const TAG_PAYLOAD_TYPE = 0x28;
+const TAG_PAYLOAD_UTF8 = 0x32;
+const TAG_PAYLOAD_BINARY = 0x3a;
+
+/** Shared read cursor (parsing is synchronous, so a module-level cursor is safe). */
+let pos = 0;
+
+function nextVarint(buf: Buffer): number {
+  let val = 0;
+  let shift = 0;
+  let b: number;
+  do {
+    b = buf[pos++];
+    val |= (b & 0x7f) << shift;
+    shift += 7;
+  } while (b & 0x80 && shift < 35);
+  return val >>> 0;
+}
+
+function skipValue(buf: Buffer, wireType: number): void {
+  if (wireType === 0) nextVarint(buf);
+  else if (wireType === 1) pos += 8;
+  else if (wireType === 2) pos += nextVarint(buf);
+  else if (wireType === 5) pos += 4;
+  else pos = buf.length;
+}
+
+function varintSize(val: number): number {
+  val >>>= 0;
+  let n = 1;
+  while (val > 0x7f) {
+    val >>>= 7;
+    n++;
+  }
+  return n;
+}
+
+function putVarint(out: Buffer, offset: number, val: number): number {
+  val >>>= 0;
+  while (val > 0x7f) {
+    out[offset++] = (val & 0x7f) | 0x80;
+    val >>>= 7;
+  }
+  out[offset++] = val;
+  return offset;
+}
+
 export function writeVarint(arr: number[], val: number): void {
-  val = val >>> 0;
+  val >>>= 0;
   while (val > 0x7f) {
     arr.push((val & 0x7f) | 0x80);
     val >>>= 7;
@@ -22,64 +75,56 @@ export function writeVarint(arr: number[], val: number): void {
   arr.push(val);
 }
 
-export function writeBytes(chunks: Buffer[], tag: number, buf: Buffer): void {
-  const head: number[] = [tag];
-  writeVarint(head, buf.length);
-  chunks.push(Buffer.from(head), buf);
-}
-
 export function readVarint(buf: Buffer, offset: number): [number, number] {
-  let val = 0;
-  let shift = 0;
-  let b: number;
-  do {
-    b = buf[offset++];
-    val |= (b & 0x7f) << shift;
-    shift += 7;
-  } while (b & 0x80);
-  return [val >>> 0, offset];
-}
-
-export function skipField(buf: Buffer, offset: number, wireType: number): number {
-  if (wireType === 0) return readVarint(buf, offset)[1];
-  if (wireType === 1) return offset + 8;
-  if (wireType === 2) {
-    const [len, next] = readVarint(buf, offset);
-    return next + len;
-  }
-  if (wireType === 5) return offset + 4;
-  return buf.length;
+  pos = offset;
+  const val = nextVarint(buf);
+  return [val, pos];
 }
 
 export const CastMessage = {
+  /** Encodes into a single pre-sized buffer (no intermediate chunks / concat). */
   serialize(msg: CastMessagePayload): Buffer {
-    const chunks: Buffer[] = [];
-    const pv = [0x08];
-    writeVarint(pv, msg.protocolVersion || 0);
-    chunks.push(Buffer.from(pv));
+    const pv = msg.protocolVersion || 0;
+    const pt = msg.payloadType || 0;
+    const strings: [number, string | undefined][] = [
+      [TAG_SOURCE_ID, msg.sourceId],
+      [TAG_DESTINATION_ID, msg.destinationId],
+      [TAG_NAMESPACE, msg.namespace],
+    ];
+    const lengths = strings.map(([, s]) => (s === undefined ? -1 : Buffer.byteLength(s)));
+    const utf8 = msg.payloadUtf8;
+    const utf8Len = utf8 === undefined ? -1 : Buffer.byteLength(utf8);
+    const bin = msg.payloadBinary;
+    const binLen = bin === undefined ? -1 : bin.length;
 
-    if (msg.sourceId !== undefined) {
-      writeBytes(chunks, 0x12, Buffer.from(msg.sourceId, "utf8"));
-    }
-    if (msg.destinationId !== undefined) {
-      writeBytes(chunks, 0x1a, Buffer.from(msg.destinationId, "utf8"));
-    }
-    if (msg.namespace !== undefined) {
-      writeBytes(chunks, 0x22, Buffer.from(msg.namespace, "utf8"));
-    }
+    const fieldSize = (len: number) => (len < 0 ? 0 : 1 + varintSize(len) + len);
+    const out = Buffer.allocUnsafe(
+      2 + varintSize(pv) + varintSize(pt) +
+      fieldSize(lengths[0]) + fieldSize(lengths[1]) + fieldSize(lengths[2]) +
+      fieldSize(utf8Len) + fieldSize(binLen)
+    );
 
-    const pt = [0x28];
-    writeVarint(pt, msg.payloadType || 0);
-    chunks.push(Buffer.from(pt));
+    let o = 0;
+    const putString = (tag: number, str: string, len: number) => {
+      out[o++] = tag;
+      o = putVarint(out, o, len);
+      o += out.write(str, o, len, "utf8");
+    };
 
-    if (msg.payloadUtf8 !== undefined) {
-      writeBytes(chunks, 0x32, Buffer.from(msg.payloadUtf8, "utf8"));
+    out[o++] = TAG_PROTOCOL_VERSION;
+    o = putVarint(out, o, pv);
+    for (let i = 0; i < 3; i++) {
+      if (lengths[i] >= 0) putString(strings[i][0], strings[i][1]!, lengths[i]);
     }
-    if (msg.payloadBinary !== undefined) {
-      writeBytes(chunks, 0x3a, msg.payloadBinary);
+    out[o++] = TAG_PAYLOAD_TYPE;
+    o = putVarint(out, o, pt);
+    if (utf8 !== undefined) putString(TAG_PAYLOAD_UTF8, utf8, utf8Len);
+    if (bin !== undefined) {
+      out[o++] = TAG_PAYLOAD_BINARY;
+      o = putVarint(out, o, binLen);
+      bin.copy(out, o);
     }
-
-    return Buffer.concat(chunks);
+    return out;
   },
 
   parse(buf: Buffer): CastMessagePayload {
@@ -92,33 +137,37 @@ export const CastMessage = {
       payloadUtf8: undefined,
       payloadBinary: undefined,
     };
-    let offset = 0;
-    while (offset < buf.length) {
-      let tag: number;
-      [tag, offset] = readVarint(buf, offset);
-      const field = tag >>> 3;
-      const wire = tag & 0x07;
-      if (field === 1 && wire === 0) {
-        [msg.protocolVersion, offset] = readVarint(buf, offset);
-      } else if (field === 5 && wire === 0) {
-        let pType: number;
-        [pType, offset] = readVarint(buf, offset);
-        msg.payloadType = pType === 1 ? 1 : 0;
-      } else if (
-        (field === 2 || field === 3 || field === 4 || field === 6 || field === 7) &&
-        wire === 2
-      ) {
-        let len: number;
-        [len, offset] = readVarint(buf, offset);
-        const slice = buf.subarray(offset, offset + len);
-        offset += len;
-        if (field === 2) msg.sourceId = slice.toString("utf8");
-        else if (field === 3) msg.destinationId = slice.toString("utf8");
-        else if (field === 4) msg.namespace = slice.toString("utf8");
-        else if (field === 6) msg.payloadUtf8 = slice.toString("utf8");
-        else if (field === 7) msg.payloadBinary = slice;
-      } else {
-        offset = skipField(buf, offset, wire);
+    pos = 0;
+    while (pos < buf.length) {
+      const tag = nextVarint(buf);
+      switch (tag) {
+        case TAG_PROTOCOL_VERSION:
+          msg.protocolVersion = nextVarint(buf);
+          break;
+        case TAG_PAYLOAD_TYPE:
+          msg.payloadType = nextVarint(buf) === 1 ? 1 : 0;
+          break;
+        case TAG_SOURCE_ID:
+        case TAG_DESTINATION_ID:
+        case TAG_NAMESPACE:
+        case TAG_PAYLOAD_UTF8:
+        case TAG_PAYLOAD_BINARY: {
+          const len = nextVarint(buf);
+          const start = pos;
+          pos += len;
+          if (tag === TAG_PAYLOAD_BINARY) {
+            msg.payloadBinary = buf.subarray(start, pos);
+          } else {
+            const str = buf.toString("utf8", start, pos);
+            if (tag === TAG_SOURCE_ID) msg.sourceId = str;
+            else if (tag === TAG_DESTINATION_ID) msg.destinationId = str;
+            else if (tag === TAG_NAMESPACE) msg.namespace = str;
+            else msg.payloadUtf8 = str;
+          }
+          break;
+        }
+        default:
+          skipValue(buf, tag & 0x07);
       }
     }
     return msg;

@@ -80,18 +80,17 @@ export function getDaemonScriptPath(): string {
   if (runtime.cachedDaemonPath) return runtime.cachedDaemonPath;
 
   const dataDir = (utils.resolvePath("@data") || "").replace(/\/+$/, "");
+  const pluginsDir = dataDir ? dataDir.replace(/\/\.data(\/.*)?$/, "") : "";
   const pluginDirFromData = dataDir.replace(/\/\.data\/([^/]+)$/, "/$1");
-  const pluginsBase =
-    "~/Library/Application Support/com.colliderli.iina/plugins";
 
   const candidates = [
     pluginDirFromData ? `${pluginDirFromData}/dist/daemon.js` : "",
-    utils.resolvePath(
-      `${pluginsBase}/io.iina.chromecast.iinaplugin-dev/dist/daemon.js`
-    ),
-    utils.resolvePath(
-      `${pluginsBase}/io.iina.chromecast.iinaplugin/dist/daemon.js`
-    ),
+    pluginsDir
+      ? `${pluginsDir}/io.iina.chromecast.iinaplugin-dev/dist/daemon.js`
+      : "",
+    pluginsDir
+      ? `${pluginsDir}/io.iina.chromecast.iinaplugin/dist/daemon.js`
+      : "",
     utils.resolvePath("dist/daemon.js"),
   ].filter(Boolean) as string[];
 

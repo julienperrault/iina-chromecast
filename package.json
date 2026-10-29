@@ -7,6 +7,7 @@
     "build": "node build.js",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.js",
+    "bench": "node bench/run.js",
     "lint": "node lint.js",
     "check": "node lint.js && npm test && node build.js",
     "link": "ln -sfn \"$PWD\" \"$HOME/Library/Application Support/com.colliderli.iina/plugins/io.iina.chromecast.iinaplugin-dev\"",

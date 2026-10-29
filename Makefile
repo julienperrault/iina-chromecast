@@ -2,13 +2,14 @@
 # IINA Chromecast Plugin (io.iina.chromecast) — Makefile
 # ==============================================================================
 
-NODE        ?= node
-NPM         ?= npm
-DAEMON_PORT := 45890
-PLUGIN_DIR  := $(HOME)/Library/Application Support/com.colliderli.iina/plugins/io.iina.chromecast.iinaplugin-dev
-PACKAGE_ZIP := iina-chromecast.iinaplugin.zip
+NODE             ?= node
+NPM              ?= npm
+DAEMON_PORT      := 45890
+IINA_PLUGINS_DIR ?= $(HOME)/Library/Application Support/com.colliderli.iina/plugins
+PLUGIN_DIR       ?= $(IINA_PLUGINS_DIR)/io.iina.chromecast.iinaplugin-dev
+PACKAGE_ZIP      := iina-chromecast.iinaplugin.zip
 
-.PHONY: help all build typecheck test lint deadcode check link package daemon-start daemon-stop daemon-restart daemon-status clean
+.PHONY: help all build typecheck test bench lint deadcode check link package daemon-start daemon-stop daemon-restart daemon-status clean
 
 all: check
 
@@ -18,6 +19,7 @@ help:
 	@echo "  make build           Bundle and minify dist/daemon.js and dist/index.js"
 	@echo "  make typecheck       Verify strict TypeScript types (tsc --noEmit)"
 	@echo "  make test            Run native unit test suite (node:test)"
+	@echo "  make bench           Run micro-benchmark suite against baseline"
 	@echo "  make lint            Run static analysis, thread-safety & i18n checks (en/fr/es)"
 	@echo "  make deadcode        Audit codebase for unused translation keys & dead code"
 	@echo "  make check           Run linter + tests + build"
@@ -35,6 +37,9 @@ typecheck:
 test:
 	$(NODE) --test test/*.test.js
 
+bench:
+	$(NODE) bench/run.js --compare bench/baseline.json
+
 lint:
 	$(NODE) lint.js
 
@@ -47,6 +52,7 @@ build:
 check: lint test build daemon-restart
 
 link:
+	@mkdir -p "$(IINA_PLUGINS_DIR)"
 	ln -sfn "$(CURDIR)" "$(PLUGIN_DIR)"
 	@echo "Linked -> $(PLUGIN_DIR)"
 
@@ -67,7 +73,7 @@ daemon-status:
 
 package: lint build
 	rm -f $(PACKAGE_ZIP)
-	zip -r $(PACKAGE_ZIP) Info.json dist ui i18n README.md docs LICENSE
+	zip -r $(PACKAGE_ZIP) Info.json dist ui i18n README.md docs LICENSE -x "*.DS_Store"
 	@echo "Created $(PACKAGE_ZIP)"
 
 clean:

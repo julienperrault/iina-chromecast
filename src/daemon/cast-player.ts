@@ -131,7 +131,8 @@ export class CastPlayerManager {
     filePath,
     url,
     title,
-    startTime = 0,
+    startTime,
+    currentTime,
     subtitlePath = null,
     audioStreamIndex = null,
     subtitleStreamIndex = null,
@@ -142,11 +143,13 @@ export class CastPlayerManager {
     url?: string;
     title?: string;
     startTime?: number;
+    currentTime?: number;
     subtitlePath?: string | null;
     audioStreamIndex?: number | null;
     subtitleStreamIndex?: number | string | null;
     transcodeMode?: "auto" | "remux" | "transcode" | "direct";
   }): Promise<void> {
+    const effectiveStartTime = startTime ?? currentTime ?? 0;
     const device = this.devices.get(deviceId);
     if (!device) {
       throw new Error(
@@ -165,7 +168,7 @@ export class CastPlayerManager {
     this.activeCast.isLoadingMedia = true;
     this.activeCast.device = device;
     this.activeCast.playerState = "CONNECTING";
-    this.activeCast.currentTime = Math.floor(startTime || 0);
+    this.activeCast.currentTime = Math.floor(effectiveStartTime);
     this.activeCast.seekOffset = 0;
     this.activeCast.error = null;
     this.streamServer.killActiveFfmpeg();
@@ -232,8 +235,8 @@ export class CastPlayerManager {
 
       this.activeCast.subtitleStreamIndex = chosenSubIndex ?? null;
       this.activeCast.seekOffset =
-        compat.mode === "direct" ? 0 : Math.floor(startTime || 0);
-      this.activeCast.currentTime = Math.floor(startTime || 0);
+        compat.mode === "direct" ? 0 : Math.floor(effectiveStartTime);
+      this.activeCast.currentTime = Math.floor(effectiveStartTime);
       duration = this.activeCast.duration;
 
       this.activeCast.vttContent = null;
@@ -267,7 +270,7 @@ export class CastPlayerManager {
       duration,
       autoplay: true,
       initialCurrentTime:
-        this.activeCast.mode === "direct" ? Math.floor(startTime || 0) : 0,
+        this.activeCast.mode === "direct" ? Math.floor(effectiveStartTime) : 0,
       localIp,
       httpPort,
     };
@@ -455,6 +458,7 @@ export class CastPlayerManager {
       player.load(media, loadOptions, (loadErr: Error | null, status: any) => {
         this.activeCast.isLoadingMedia = false;
         if (loadErr) {
+          this.activeCast.playerState = "IDLE";
           return reject(
             new Error(
               t(this.config.language, "error.load_failed", {
@@ -464,7 +468,11 @@ export class CastPlayerManager {
           );
         }
 
-        this.activeCast.playerState = "PLAYING";
+        if (status && status.playerState && status.playerState !== "IDLE") {
+          this.activeCast.playerState = status.playerState;
+        } else {
+          this.activeCast.playerState = "BUFFERING";
+        }
         this.handlePlayerStatus(status);
         this.startStatusPolling();
         resolve(status);
@@ -477,6 +485,17 @@ export class CastPlayerManager {
     if (this.activeCast.isLoadingMedia) {
       return;
     }
+
+    if (
+      status.playerState === "IDLE" &&
+      !status.idleReason &&
+      (this.activeCast.playerState === "BUFFERING" ||
+        this.activeCast.playerState === "CONNECTING" ||
+        this.activeCast.playerState === "PLAYING")
+    ) {
+      return;
+    }
+
     const previousState = this.activeCast.playerState;
     this.activeCast.playerState =
       status.playerState || this.activeCast.playerState;
@@ -525,7 +544,8 @@ export class CastPlayerManager {
         return;
       if (
         this.activeCast.playerState !== "PLAYING" &&
-        this.activeCast.playerState !== "BUFFERING"
+        this.activeCast.playerState !== "BUFFERING" &&
+        this.activeCast.playerState !== "CONNECTING"
       ) {
         return;
       }
@@ -537,6 +557,35 @@ export class CastPlayerManager {
         });
       } catch (e) {}
     }, 1000);
+  }
+
+  private async reloadActiveStream(resumePosition: number): Promise<void> {
+    if (!this.activeCast.player || !this.activeCast.device) return;
+
+    this.activeCast.seekOffset =
+      this.activeCast.mode === "direct" ? 0 : resumePosition;
+    this.activeCast.currentTime = resumePosition;
+
+    this.activeCast.vttContent = null;
+    this.activeCast.vttContentOffset = null;
+
+    const localIp = getLocalIpAddress(this.activeCast.device.host);
+    const httpPort = this.streamServer.getPort();
+    const streamUrl = `http://${localIp}:${httpPort}/video?start=${this.activeCast.seekOffset}&t=${Date.now()}`;
+
+    await this.loadCurrentStreamOnPlayer({
+      player: this.activeCast.player,
+      streamUrl,
+      contentType: this.streamServer.getStreamContentType(this.activeCast),
+      streamType: "BUFFERED",
+      title: this.activeCast.title || "IINA Video",
+      duration: this.activeCast.duration,
+      autoplay: true,
+      initialCurrentTime:
+        this.activeCast.mode === "direct" ? resumePosition : 0,
+      localIp,
+      httpPort,
+    });
   }
 
   public async selectTracks({
@@ -587,28 +636,7 @@ export class CastPlayerManager {
       this.activeCast.mediaInfo = compat.summary;
     }
 
-    this.activeCast.vttContent = null;
-    this.activeCast.vttContentOffset = null;
-
-    this.activeCast.seekOffset =
-      this.activeCast.mode === "direct" ? 0 : resumePosition;
-    const localIp = getLocalIpAddress(this.activeCast.device.host);
-    const httpPort = this.streamServer.getPort();
-    const streamUrl = `http://${localIp}:${httpPort}/video?start=${this.activeCast.seekOffset}&t=${Date.now()}`;
-
-    await this.loadCurrentStreamOnPlayer({
-      player: this.activeCast.player,
-      streamUrl,
-      contentType: this.streamServer.getStreamContentType(this.activeCast),
-      streamType: "BUFFERED",
-      title: this.activeCast.title || "IINA Video",
-      duration: this.activeCast.duration,
-      autoplay: true,
-      initialCurrentTime:
-        this.activeCast.mode === "direct" ? resumePosition : 0,
-      localIp,
-      httpPort,
-    });
+    await this.reloadActiveStream(resumePosition);
   }
 
   public play(): void {
@@ -634,25 +662,8 @@ export class CastPlayerManager {
         if (!err) this.handlePlayerStatus(status);
       });
     } else {
-      this.activeCast.seekOffset = Math.floor(clamped);
-      this.activeCast.currentTime = this.activeCast.seekOffset;
-      const localIp = getLocalIpAddress(this.activeCast.device.host);
-      const httpPort = this.streamServer.getPort();
-      const streamUrl = `http://${localIp}:${httpPort}/video?start=${this.activeCast.seekOffset}&t=${Date.now()}`;
-
       try {
-        await this.loadCurrentStreamOnPlayer({
-          player: this.activeCast.player,
-          streamUrl,
-          contentType: this.streamServer.getStreamContentType(this.activeCast),
-          streamType: "BUFFERED",
-          title: this.activeCast.title || "IINA Video",
-          duration: this.activeCast.duration,
-          autoplay: true,
-          initialCurrentTime: 0,
-          localIp,
-          httpPort,
-        });
+        await this.reloadActiveStream(Math.floor(clamped));
       } catch (err: any) {
         this.logError(`Seek reload error: ${err.message}`);
       }

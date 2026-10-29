@@ -87,6 +87,9 @@ make typecheck
 # Run the native unit test suite (node:test)
 make test
 
+# Run micro-benchmark suite against baseline
+make bench
+
 # Run the linter (TypeScript, JS syntax, IINA 1.5 anti-deadlock checks, HTML inline scripts, en/fr/es i18n parity)
 make lint
 
@@ -96,7 +99,7 @@ make deadcode
 # Bundle and minify dist/daemon.js and dist/index.js
 make build
 
-# Run lint + build + restart background daemon
+# Run lint + tests + build + restart background daemon
 make check
 
 # Check or restart the background Chromecast daemon manually
@@ -115,10 +118,16 @@ make package
 iina-chromecast/
 ├── Info.json              # IINA plugin manifest, permissions, defaults & localized metadata (en/fr/es)
 ├── LICENSE                # GNU General Public License v3.0 (GPLv3)
-├── Makefile               # Build, lint, daemon lifecycle & packaging automation
-├── build.js               # esbuild bundler + build-time protobufjs descriptor compiler
+├── Makefile               # Build, lint, bench, daemon lifecycle & packaging automation
+├── build.js               # esbuild bundler with standalone wire-format CASTV2 codec injection
 ├── lint.js                # Static analyzer, IINA 1.5 thread-safety verifier & i18n checker
 ├── package.json           # Dependencies & npm scripts
+├── tsconfig.json          # Strict TypeScript compiler configuration
+├── bench/                 # Micro-benchmark harness and performance baselines
+│   ├── baseline.json      # Reference performance measurements
+│   ├── fixtures.js        # Synthetic payloads (CastMessage, WebVTT, media probes)
+│   ├── run.js             # Standalone runner with comparison mode against baseline
+│   └── subtitles-e2e.js   # Full-file subtitle extraction & shifting benchmark
 ├── docs/
 │   └── ARCHITECTURE.md    # Detailed architecture & Mermaid workflow diagrams
 ├── i18n/
@@ -131,6 +140,9 @@ iina-chromecast/
 │   ├── shared/            # Shared modules (i18n loader, wire-format Protobuf protocol)
 │   └── types/             # TypeScript interfaces and RPC payload definitions
 ├── test/                  # Automated unit test suite (native node:test, 0 extra npm dependencies)
+│   ├── setup.js           # Lightweight in-memory TypeScript module resolution for node:test
+│   ├── streamer.test.js   # RFC 7233 byte-range & FFmpeg argument builder tests
+│   └── subtitles.test.js  # WebVTT timestamp shifting & SubtitleManager lifecycle tests
 └── ui/
     ├── sidebar.html       # Streamlined Chromecast sidebar UI (Devices, Tracks, Cast/Stop)
     └── preferences.html   # Plugin preferences page (Language, Strategy, 4K/HEVC, Bitrate, Paths)

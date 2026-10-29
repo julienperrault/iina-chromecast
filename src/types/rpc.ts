@@ -57,6 +57,7 @@ export interface RpcRequestPayload {
   url?: string;
   title?: string;
   deviceId?: string;
+  startTime?: number;
   currentTime?: number;
   time?: number;
   subtitlePath?: string | null;

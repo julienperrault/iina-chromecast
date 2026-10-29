@@ -4,6 +4,150 @@ import path from "node:path";
 import { spawn, ChildProcess } from "node:child_process";
 import type { DaemonConfig } from "../types/rpc.js";
 import type { SubtitleManager } from "./subtitles.js";
+import type { CompatibilityResult } from "../types/plugin.js";
+
+export interface RangeResult {
+  start: number;
+  end: number;
+  chunkSize: number;
+}
+
+/**
+ * Parses an HTTP Range header according to RFC 7233.
+ * Returns null if the header is missing, or { start, end, chunkSize },
+ * or throws/returns false if the range is invalid (416).
+ */
+export function parseRange(
+  rangeHeader: string | undefined,
+  totalSize: number
+): RangeResult | null | false {
+  if (!rangeHeader || !rangeHeader.startsWith("bytes=")) {
+    return null;
+  }
+
+  const range = rangeHeader.slice(6).trim();
+  const dashPos = range.indexOf("-");
+  if (dashPos === -1) return false;
+
+  const rawStart = range.slice(0, dashPos).trim();
+  const rawEnd = range.slice(dashPos + 1).trim();
+
+  let start: number;
+  let end: number;
+
+  if (rawStart === "") {
+    // Suffix range: bytes=-500
+    const suffix = parseInt(rawEnd, 10);
+    if (isNaN(suffix) || suffix <= 0) return false;
+    start = Math.max(0, totalSize - suffix);
+    end = totalSize - 1;
+  } else {
+    start = parseInt(rawStart, 10);
+    if (isNaN(start) || start < 0 || start >= totalSize) return false;
+    if (rawEnd === "") {
+      end = totalSize - 1;
+    } else {
+      end = parseInt(rawEnd, 10);
+      if (isNaN(end) || end < start) return false;
+      if (end >= totalSize) end = totalSize - 1;
+    }
+  }
+
+  return {
+    start,
+    end,
+    chunkSize: end - start + 1,
+  };
+}
+
+export interface FfmpegStreamOptions {
+  filePath: string;
+  startSec: number;
+  compat: CompatibilityResult | null;
+  config: DaemonConfig;
+  audioStreamIndex: number | null;
+}
+
+export function buildFfmpegStreamArgs({
+  filePath,
+  startSec,
+  compat,
+  config,
+  audioStreamIndex,
+}: FfmpegStreamOptions): string[] {
+  const isVideoCopy = Boolean(compat && compat.videoCopy);
+  const args = ["-hide_banner", "-loglevel", "warning"];
+
+  if (!isVideoCopy) {
+    args.push("-hwaccel", "videotoolbox");
+  }
+  if (startSec > 0) {
+    if (isVideoCopy) {
+      args.push("-noaccurate_seek");
+    }
+    args.push("-ss", String(startSec));
+  }
+  args.push("-i", filePath, "-map", "0:v:0");
+
+  if (audioStreamIndex !== null && audioStreamIndex !== undefined) {
+    args.push("-map", `0:${audioStreamIndex}?`);
+  } else {
+    args.push("-map", "0:a:0?");
+  }
+
+  if (isVideoCopy) {
+    args.push("-c:v", "copy");
+    if (compat && compat.isHevcStream) {
+      args.push("-tag:v", "hvc1");
+    }
+  } else {
+    const maxW =
+      Number(config.maxResolution) === 720
+        ? 1280
+        : Number(config.maxResolution) === 2160
+        ? 3840
+        : 1920;
+    args.push(
+      "-c:v",
+      "h264_videotoolbox",
+      "-b:v",
+      config.videoBitrate || "8M",
+      "-allow_sw",
+      "1",
+      "-pix_fmt",
+      "yuv420p",
+      "-vf",
+      `scale='min(${maxW},iw)':-2`
+    );
+  }
+
+  if (compat && compat.audioCopy) {
+    args.push("-c:a", "copy");
+  } else {
+    args.push(
+      "-c:a",
+      "aac",
+      "-ac",
+      "2",
+      "-b:a",
+      "192k",
+      "-af",
+      "aresample=async=1"
+    );
+  }
+
+  args.push(
+    "-avoid_negative_ts",
+    "make_zero",
+    "-movflags",
+    "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
+    "-f",
+    "mp4",
+    "pipe:1"
+  );
+
+  return args;
+}
 
 export class StreamServer {
   private server: http.Server | null = null;
@@ -122,57 +266,44 @@ export class StreamServer {
     if (activeCast.mode === "direct") {
       const total = stat.size;
       const contentType = this.getStreamContentType(activeCast);
+      const parsedRange = parseRange(req.headers.range, total);
 
-      const range = req.headers.range;
-      if (range) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : total - 1;
-
-        if (
-          isNaN(start) ||
-          isNaN(end) ||
-          start >= total ||
-          end >= total ||
-          start > end
-        ) {
-          res.writeHead(416, { "Content-Range": `bytes */${total}` });
-          res.end();
-          return;
-        }
-
-        const chunksize = end - start + 1;
-        res.writeHead(206, {
-          "Content-Range": `bytes ${start}-${end}/${total}`,
-          "Accept-Ranges": "bytes",
-          "Content-Length": chunksize,
-          "Content-Type": contentType,
-        });
-
-        if (req.method === "HEAD") {
-          res.end();
-          return;
-        }
-
-        const fileStream = fs.createReadStream(filePath, { start, end });
-        req.on("close", () => fileStream.destroy());
-        fileStream.pipe(res);
-      } else {
-        res.writeHead(200, {
-          "Content-Length": total,
-          "Accept-Ranges": "bytes",
-          "Content-Type": contentType,
-        });
-
-        if (req.method === "HEAD") {
-          res.end();
-          return;
-        }
-
-        const fileStream = fs.createReadStream(filePath);
-        req.on("close", () => fileStream.destroy());
-        fileStream.pipe(res);
+      if (parsedRange === false) {
+        res.writeHead(416, { "Content-Range": `bytes */${total}` });
+        res.end();
+        return;
       }
+
+      const isPartial = parsedRange !== null;
+      const headers: Record<string, string | number> = {
+        "Accept-Ranges": "bytes",
+        "Content-Type": contentType,
+      };
+
+      let streamOptions: { start?: number; end?: number } = {};
+      if (isPartial) {
+        headers["Content-Range"] = `bytes ${parsedRange.start}-${parsedRange.end}/${total}`;
+        headers["Content-Length"] = parsedRange.chunkSize;
+        streamOptions = { start: parsedRange.start, end: parsedRange.end };
+      } else {
+        headers["Content-Length"] = total;
+      }
+
+      res.writeHead(isPartial ? 206 : 200, headers);
+
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+
+      const fileStream = fs.createReadStream(filePath, streamOptions);
+      req.on("close", () => fileStream.destroy());
+      fileStream.on("error", () => {
+        try {
+          res.end();
+        } catch (e) {}
+      });
+      fileStream.pipe(res);
       return;
     }
 
@@ -187,86 +318,23 @@ export class StreamServer {
       return;
     }
 
+    if (req.socket) {
+      req.socket.setNoDelay(true);
+    }
+
     const startSec = Number(
       parsedUrl.searchParams.get("start") || activeCast.seekOffset || 0
     );
-    const compat = activeCast.compatibility;
 
     this.killActiveFfmpeg();
 
-    const isVideoCopy = Boolean(compat && compat.videoCopy);
-    const ffmpegArgs = ["-hide_banner", "-loglevel", "warning"];
-
-    if (!isVideoCopy) {
-      ffmpegArgs.push("-hwaccel", "videotoolbox");
-    }
-    if (startSec > 0) {
-      if (isVideoCopy) {
-        ffmpegArgs.push("-noaccurate_seek");
-      }
-      ffmpegArgs.push("-ss", String(startSec));
-    }
-    ffmpegArgs.push("-i", filePath, "-map", "0:v:0");
-
-    if (
-      activeCast.audioStreamIndex !== null &&
-      activeCast.audioStreamIndex !== undefined
-    ) {
-      ffmpegArgs.push("-map", `0:${activeCast.audioStreamIndex}?`);
-    } else {
-      ffmpegArgs.push("-map", "0:a:0?");
-    }
-
-    if (isVideoCopy) {
-      ffmpegArgs.push("-c:v", "copy");
-      if (compat && compat.isHevcStream) {
-        ffmpegArgs.push("-tag:v", "hvc1");
-      }
-    } else {
-      const maxW =
-        Number(config.maxResolution) === 720
-          ? 1280
-          : Number(config.maxResolution) === 2160
-          ? 3840
-          : 1920;
-      ffmpegArgs.push(
-        "-c:v",
-        "h264_videotoolbox",
-        "-b:v",
-        config.videoBitrate || "8M",
-        "-allow_sw",
-        "1",
-        "-pix_fmt",
-        "yuv420p",
-        "-vf",
-        `scale='min(${maxW},iw)':-2`
-      );
-    }
-
-    if (compat && compat.audioCopy) {
-      ffmpegArgs.push("-c:a", "copy");
-    } else {
-      ffmpegArgs.push(
-        "-c:a",
-        "aac",
-        "-ac",
-        "2",
-        "-b:a",
-        "192k",
-        "-af",
-        "aresample=async=1"
-      );
-    }
-
-    ffmpegArgs.push(
-      "-avoid_negative_ts",
-      "make_zero",
-      "-movflags",
-      "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
-      "-f",
-      "mp4",
-      "pipe:1"
-    );
+    const ffmpegArgs = buildFfmpegStreamArgs({
+      filePath,
+      startSec,
+      compat: activeCast.compatibility,
+      config,
+      audioStreamIndex: activeCast.audioStreamIndex,
+    });
 
     const ffmpegProc = spawn(config.ffmpegPath, ffmpegArgs);
     this.activeFfmpegProcesses.add(ffmpegProc);

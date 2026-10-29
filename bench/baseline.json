@@ -1,0 +1,30 @@
+[
+  {
+    "name": "shiftVttTimestamps (2h film, ~1700 cues, offset 1h)",
+    "nsPerOp": 528934.79
+  },
+  {
+    "name": "CastMessage.serialize (MEDIA_STATUS)",
+    "nsPerOp": 702.8412285633962
+  },
+  {
+    "name": "CastMessage.parse (MEDIA_STATUS)",
+    "nsPerOp": 440.4743305144468
+  },
+  {
+    "name": "t() with params",
+    "nsPerOp": 405.36194162950954
+  },
+  {
+    "name": "t() without params",
+    "nsPerOp": 67.31666352523023
+  },
+  {
+    "name": "extractTracksList",
+    "nsPerOp": 501.5396188565697
+  },
+  {
+    "name": "analyzeCompatibility (4K HEVC MKV)",
+    "nsPerOp": 1031.0331718878813
+  }
+]

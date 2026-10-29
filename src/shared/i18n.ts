@@ -46,13 +46,17 @@ export function resolveLanguage(
 export function t(
   lang: string | null | undefined,
   key: string,
-  params: Record<string, string | number | null | undefined> = {}
+  params?: Record<string, string | number | null | undefined>
 ): string {
   const resolved = resolveLanguage(lang);
   const dict = TRANSLATIONS[resolved] || TRANSLATIONS.en;
-  const template = dict[key] ?? TRANSLATIONS.en[key] ?? key;
+  const template = String(dict[key] ?? TRANSLATIONS.en[key] ?? key);
 
-  return String(template).replace(/\{(\w+)\}/g, (_, k) =>
+  if (!params || !template.includes("{")) {
+    return template;
+  }
+
+  return template.replace(/\{(\w+)\}/g, (_, k) =>
     params[k] !== undefined && params[k] !== null ? String(params[k]) : ""
   );
 }

@@ -166,6 +166,7 @@ export async function castToDevice(
     filePath: state.currentFilePath,
     url: state.currentFileUrl,
     title: state.currentTitle,
+    startTime,
     currentTime: startTime,
     subtitlePath,
     audioStreamIndex: state.selectedAudioStreamIndex,

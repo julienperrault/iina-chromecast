@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import type { DaemonConfig, DaemonSnapshot } from "../types/rpc.js";
 import type { DiscoveredDevice } from "../types/plugin.js";
-import { DiscoveryService, detect4kHevcSupport } from "./discovery.js";
+import { DiscoveryService } from "./discovery.js";
 import { resolveBinaries, probeMedia, analyzeCompatibility } from "./compatibility.js";
 import { StreamServer } from "./streamer.js";
 import { SubtitleManager } from "./subtitles.js";
@@ -44,16 +44,10 @@ const castPlayer = new CastPlayerManager(
 );
 const discovery = new DiscoveryService(() => config, devices);
 
-function getSortedDevices(): DiscoveredDevice[] {
-  return Array.from(devices.values()).sort((a, b) =>
-    a.name.localeCompare(b.name)
-  );
-}
-
 function buildFullStateSnapshot(): DaemonSnapshot {
   const active = castPlayer.activeCast;
   return {
-    devices: getSortedDevices(),
+    devices: discovery.getDevices(),
     castState: active.playerState as any,
     activeDevice: active.device,
     mode: active.mode,
@@ -84,14 +78,7 @@ async function handleAction(action: string, payload: any = {}): Promise<any> {
       if (payload.maxResolution)
         config.maxResolution = Number(payload.maxResolution) || 1080;
       if (payload.allow4kHevc) config.allow4kHevc = payload.allow4kHevc;
-      for (const [id, dev] of devices.entries()) {
-        dev.supports4kHevc = detect4kHevcSupport(
-          dev.model,
-          dev.name,
-          config.allow4kHevc
-        );
-        devices.set(id, dev);
-      }
+      discovery.updateDeviceCapabilities();
       discovery.queryMdns(true);
       return buildFullStateSnapshot();
 
@@ -120,13 +107,13 @@ async function handleAction(action: string, payload: any = {}): Promise<any> {
       return buildFullStateSnapshot();
 
     case "seek":
-      castPlayer.seek(payload.time).catch((err) => {
+      castPlayer.seek(payload.time ?? payload.currentTime ?? 0).catch((err) => {
         castPlayer.logError(err.message);
       });
       return buildFullStateSnapshot();
 
     case "volume":
-      castPlayer.setVolume(payload.level, payload.muted);
+      castPlayer.setVolume(payload.level ?? payload.volume, payload.muted);
       return buildFullStateSnapshot();
 
     case "stop":
@@ -178,12 +165,13 @@ export function startControlServer(): http.Server {
     }
 
     if (req.method === "POST" && req.url === "/rpc") {
-      let body = "";
+      const chunks: Buffer[] = [];
       req.on("data", (chunk: Buffer) => {
-        body += chunk.toString();
+        chunks.push(chunk);
       });
       req.on("end", async () => {
         try {
+          const body = Buffer.concat(chunks).toString("utf8");
           const msg = JSON.parse(body || "{}");
           const result = await handleAction(msg.action, msg.payload || {});
           res.writeHead(200, { "Content-Type": "application/json" });

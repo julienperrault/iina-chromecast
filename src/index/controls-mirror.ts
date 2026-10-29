@@ -36,42 +36,45 @@ export function playNextInPlaylist(): boolean {
   return false;
 }
 
-export function setupNativeControlsMirroring(): void {
-  let pauseMirrorDebounceTimer: NodeJS.Timeout | null = null;
-  let seekMirrorDebounceTimer: NodeJS.Timeout | null = null;
-  let volumeMirrorDebounceTimer: NodeJS.Timeout | null = null;
-  let sidMirrorDebounceTimer: NodeJS.Timeout | null = null;
-  let aidMirrorDebounceTimer: NodeJS.Timeout | null = null;
-
-  event.on("mpv.start-file", () => {
-    runtime.fileTransitionUntil = Date.now() + 2500;
-    runtime.suppressLocalEvents = true;
-  });
-
-  event.on("mpv.end-file", () => {
-    runtime.fileTransitionUntil = Date.now() + 2500;
-    runtime.suppressLocalEvents = true;
-  });
-
-  event.on("mpv.pause.changed", () => {
-    if (
-      runtime.suppressLocalEvents ||
-      Date.now() < runtime.fileTransitionUntil ||
-      !isCastingActive()
-    )
+function createDebouncedMirrorHandler(
+  delayMs: number,
+  handler: () => void,
+  requiresMirrorPref = true
+): () => void {
+  let timer: NodeJS.Timeout | null = null;
+  return () => {
+    if (runtime.suppressLocalEvents || Date.now() < runtime.fileTransitionUntil) {
       return;
-    if (preferences.get("mirror_iina_controls") === false) return;
+    }
+    if (
+      requiresMirrorPref &&
+      (preferences.get("mirror_iina_controls") === false || !isCastingActive())
+    ) {
+      return;
+    }
 
-    if (pauseMirrorDebounceTimer) clearTimeout(pauseMirrorDebounceTimer);
-    pauseMirrorDebounceTimer = setTimeout(() => {
-      if (
-        runtime.suppressLocalEvents ||
-        isFileTransitioning() ||
-        !isCastingActive()
-      )
-        return;
-      const localPaused = core.status.paused;
-      if (!localPaused) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (runtime.suppressLocalEvents || isFileTransitioning()) return;
+      if (requiresMirrorPref && !isCastingActive()) return;
+      handler();
+    }, delayMs);
+  };
+}
+
+export function setupNativeControlsMirroring(): void {
+  const onFileBoundary = () => {
+    runtime.fileTransitionUntil = Date.now() + 2500;
+    runtime.suppressLocalEvents = true;
+  };
+
+  event.on("mpv.start-file", onFileBoundary);
+  event.on("mpv.end-file", onFileBoundary);
+
+  event.on(
+    "mpv.pause.changed",
+    createDebouncedMirrorHandler(90, () => {
+      if (!core.status.paused) {
         runtime.suppressLocalEvents = true;
         core.pause();
         setTimeout(() => {
@@ -86,26 +89,12 @@ export function setupNativeControlsMirroring(): void {
           sendRpc("pause");
         }
       }
-    }, 90);
-  });
+    })
+  );
 
-  event.on("mpv.playback-restart", () => {
-    if (
-      runtime.suppressLocalEvents ||
-      Date.now() < runtime.fileTransitionUntil ||
-      !isCastingActive()
-    )
-      return;
-    if (preferences.get("mirror_iina_controls") === false) return;
-
-    if (seekMirrorDebounceTimer) clearTimeout(seekMirrorDebounceTimer);
-    seekMirrorDebounceTimer = setTimeout(() => {
-      if (
-        runtime.suppressLocalEvents ||
-        isFileTransitioning() ||
-        !isCastingActive()
-      )
-        return;
+  event.on(
+    "mpv.playback-restart",
+    createDebouncedMirrorHandler(180, () => {
       const newPos = core.status.position;
       if (
         typeof newPos === "number" &&
@@ -117,107 +106,73 @@ export function setupNativeControlsMirroring(): void {
         core.osd(tr("osd.seek", { time: formatSeconds(targetSec) }));
         sendRpc("seek", { currentTime: targetSec });
       }
-    }, 180);
-  });
+    })
+  );
 
-  event.on("mpv.volume.changed", () => {
-    if (
-      runtime.suppressLocalEvents ||
-      Date.now() < runtime.fileTransitionUntil ||
-      !isCastingActive()
-    )
-      return;
-    if (preferences.get("mirror_iina_controls") === false) return;
-
-    if (volumeMirrorDebounceTimer) clearTimeout(volumeMirrorDebounceTimer);
-    volumeMirrorDebounceTimer = setTimeout(() => {
-      if (
-        runtime.suppressLocalEvents ||
-        isFileTransitioning() ||
-        !isCastingActive()
-      )
-        return;
-      const vol =
-        Math.max(0, Math.min(100, core.audio.volume || 100)) / 100;
+  event.on(
+    "mpv.volume.changed",
+    createDebouncedMirrorHandler(80, () => {
+      const vol = Math.max(0, Math.min(100, core.audio.volume || 100)) / 100;
       sendRpc("volume", { volume: vol });
-    }, 80);
-  });
+    })
+  );
 
-  event.on("mpv.mute.changed", () => {
-    if (
-      runtime.suppressLocalEvents ||
-      Date.now() < runtime.fileTransitionUntil ||
-      !isCastingActive()
-    )
-      return;
-    if (preferences.get("mirror_iina_controls") === false) return;
-
-    setTimeout(() => {
-      if (
-        runtime.suppressLocalEvents ||
-        isFileTransitioning() ||
-        !isCastingActive()
-      )
-        return;
+  event.on(
+    "mpv.mute.changed",
+    createDebouncedMirrorHandler(80, () => {
       sendRpc("volume", { muted: Boolean(core.audio.muted) });
-    }, 80);
-  });
+    })
+  );
 
-  event.on("mpv.sid.changed", () => {
-    if (
-      runtime.suppressLocalEvents ||
-      Date.now() < runtime.fileTransitionUntil
-    )
-      return;
-    if (sidMirrorDebounceTimer) clearTimeout(sidMirrorDebounceTimer);
-    sidMirrorDebounceTimer = setTimeout(() => {
-      if (runtime.suppressLocalEvents || isFileTransitioning()) return;
-      refreshCurrentMediaInfo();
-      if (!isCastingActive()) {
-        syncSidebar();
-        return;
-      }
-      const subTrack = core.subtitle.currentTrack;
-      if (!subTrack) {
-        switchTracksOnCast(undefined, "none");
-      } else if (subTrack.isExternal) {
-        switchTracksOnCast(undefined, "external");
-      } else {
-        const summary =
-          state.mediaInfo || state.probeCompatibility?.summary;
-        const subTracks = summary?.subtitleTracks || [];
-        const mapped = subTracks[subTrack.id - 1];
-        if (mapped) {
-          switchTracksOnCast(undefined, mapped.streamIndex);
+  event.on(
+    "mpv.sid.changed",
+    createDebouncedMirrorHandler(
+      250,
+      () => {
+        refreshCurrentMediaInfo();
+        if (!isCastingActive()) {
+          syncSidebar();
+          return;
         }
-      }
-    }, 250);
-  });
+        const subTrack = core.subtitle.currentTrack;
+        if (!subTrack) {
+          switchTracksOnCast(undefined, "none");
+        } else if (subTrack.isExternal) {
+          switchTracksOnCast(undefined, "external");
+        } else {
+          const summary = state.mediaInfo || state.probeCompatibility?.summary;
+          const subTracks = summary?.subtitleTracks || [];
+          const mapped = subTracks[subTrack.id - 1];
+          if (mapped) {
+            switchTracksOnCast(undefined, mapped.streamIndex);
+          }
+        }
+      },
+      false
+    )
+  );
 
-  event.on("mpv.aid.changed", () => {
-    if (
-      runtime.suppressLocalEvents ||
-      Date.now() < runtime.fileTransitionUntil
-    )
-      return;
-    if (aidMirrorDebounceTimer) clearTimeout(aidMirrorDebounceTimer);
-    aidMirrorDebounceTimer = setTimeout(() => {
-      if (runtime.suppressLocalEvents || isFileTransitioning()) return;
-      refreshCurrentMediaInfo();
-      if (!isCastingActive()) {
-        syncSidebar();
-        return;
-      }
-      const audioTrack = core.audio.currentTrack;
-      if (audioTrack) {
-        const summary =
-          state.mediaInfo || state.probeCompatibility?.summary;
-        const audioTracks = summary?.audioTracks || [];
-        const mapped = audioTracks[audioTrack.id - 1];
-        if (mapped) {
-          switchTracksOnCast(mapped.streamIndex, undefined);
+  event.on(
+    "mpv.aid.changed",
+    createDebouncedMirrorHandler(
+      250,
+      () => {
+        refreshCurrentMediaInfo();
+        if (!isCastingActive()) {
+          syncSidebar();
+          return;
         }
-      }
-    }, 250);
-  });
+        const audioTrack = core.audio.currentTrack;
+        if (audioTrack) {
+          const summary = state.mediaInfo || state.probeCompatibility?.summary;
+          const audioTracks = summary?.audioTracks || [];
+          const mapped = audioTracks[audioTrack.id - 1];
+          if (mapped) {
+            switchTracksOnCast(mapped.streamIndex, undefined);
+          }
+        }
+      },
+      false
+    )
+  );
 }

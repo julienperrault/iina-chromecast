@@ -30,7 +30,7 @@ export function shiftVttTimestamps(
       const start = parseTs(h1, m1, s1, ms1) - offsetSeconds;
       const end = parseTs(h2, m2, s2, ms2) - offsetSeconds;
       if (end <= 0) {
-        return `00:00:00.000 --> 00:00:00.001`;
+        return "00:00:00.000 --> 00:00:00.001";
       }
       return `${formatTs(start)} --> ${formatTs(end)}`;
     }
@@ -67,7 +67,7 @@ export class SubtitleManager {
     ffmpegPath,
     activeCast,
   }: {
-    req: IncomingMessage;
+    req?: IncomingMessage;
     res: ServerResponse;
     parsedUrl: URL;
     ffmpegPath: string;
@@ -142,7 +142,7 @@ export class SubtitleManager {
       "Cache-Control": "no-cache",
     });
 
-    if (req.method === "HEAD") {
+    if (req?.method === "HEAD") {
       res.end();
       return;
     }
@@ -185,7 +185,7 @@ export class SubtitleManager {
       res.end();
     });
 
-    req.on("close", () => {
+    req?.on("close", () => {
       if (this.activeSubProc === subProc) {
         this.activeSubProc = null;
         try {
